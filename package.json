@@ -1,6 +1,6 @@
 {
   "name": "mobileMoneyProvider",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "Fake MVola / Orange Money provider for local development and testing of a Payment Service. In-memory only.",
   "type": "module",
