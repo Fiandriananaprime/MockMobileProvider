@@ -1,102 +1,146 @@
 import type { FastifyPluginAsync } from "fastify";
-import { timingSafeEqual } from "node:crypto";
-import { MockError } from "../shared/errors.js";
-import { mvolaByServerCorrelationId } from "../providers/mvola/mvola.store.js";
 import { orangeByPayToken } from "../providers/orange-money/orange.store.js";
 import { confirmPayment } from "../providers/orange-money/orange.service.js";
-import { getConfig, resetEverything, resetOne, updateConfig } from "./mock.service.js";
-import { getProfile, listProfiles } from "./profiles.js";
+import { getPublicAccountByMsisdn, listAccounts } from "../db.js";
+import { MockError } from "../shared/errors.js";
 
-const esc = (s: unknown): string =>
-  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+const escapeHtml = (value: unknown): string =>
+  String(value).replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]!);
 
-/** EVERYTHING here is MOCK-ONLY and lives under /__mock. None of it exists in the real providers. */
+const formatAmount = (amount: number): string => new Intl.NumberFormat("fr-FR").format(amount);
+
+const checkoutPage = (input: {
+  payToken: string;
+  orderId: string;
+  amount: number;
+  currency: string;
+  status: string;
+  accounts: Array<{ msisdn: string; balance: number; currency: string }>;
+}): string => {
+  const canConfirm = input.status === "INITIATED";
+  const accountChoices = input.accounts.map((account) => `
+    <label class="wallet-option">
+      <input type="radio" name="msisdn" value="${escapeHtml(account.msisdn)}" required ${canConfirm ? "" : "disabled"}>
+      <span class="wallet-copy">
+        <strong>Orange Money</strong>
+        <span class="wallet-number">${escapeHtml(account.msisdn)}</span>
+      </span>
+      <span class="wallet-balance">${formatAmount(account.balance)} ${escapeHtml(account.currency)}</span>
+    </label>`).join("");
+
+  const content = canConfirm
+    ? input.accounts.length
+      ? `<form method="POST" action="/__mock/orange/pay/${escapeHtml(input.payToken)}/confirm">
+          <fieldset>
+            <legend>Choisissez le wallet à débiter</legend>
+            <div class="wallet-list">${accountChoices}</div>
+          </fieldset>
+          <button class="confirm-button" type="submit">Confirmer le paiement</button>
+        </form>`
+      : `<p class="empty-state">Aucun compte Orange Money actif n'est disponible pour ce paiement.</p>`
+    : `<p class="status-message">Cette demande n'est plus en attente. Statut : <strong>${escapeHtml(input.status)}</strong></p>`;
+
+  return `<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Paiement Orange Money</title>
+  <style>
+    :root { font-family: "Segoe UI", Arial, sans-serif; color: #202124; background: #f4f5f6; font-synthesis: none; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 28px 16px; }
+    main { width: min(100%, 520px); background: #fff; border: 1px solid #e2e4e7; border-radius: 12px; overflow: hidden; box-shadow: 0 16px 42px #17212b12; }
+    .brand { display: flex; align-items: center; justify-content: space-between; padding: 22px 26px; border-bottom: 1px solid #eceef0; }
+    .brand-name { display: flex; align-items: center; gap: 10px; color: #202124; font-weight: 700; font-size: 18px; }
+    .brand-mark { width: 12px; height: 26px; border-radius: 3px; background: #ff7900; }
+    .simulation { color: #626970; font-size: 12px; }
+    .content { padding: 28px 26px 26px; }
+    h1 { margin: 0 0 8px; font-size: 23px; line-height: 1.25; }
+    .intro { margin: 0 0 22px; color: #626970; font-size: 14px; line-height: 1.5; }
+    .payment-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; margin-bottom: 26px; background: #fff7ef; border: 1px solid #ffe2c5; border-radius: 8px; }
+    .summary-label { color: #626970; font-size: 13px; }
+    .order-id { display: block; margin-top: 5px; max-width: 250px; overflow-wrap: anywhere; font-size: 13px; font-weight: 600; }
+    .amount { flex: 0 0 auto; color: #242424; font-size: 20px; font-weight: 700; text-align: right; }
+    fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+    legend { margin-bottom: 12px; font-size: 14px; font-weight: 650; }
+    .wallet-list { display: grid; gap: 10px; }
+    .wallet-option { display: flex; align-items: center; gap: 12px; min-height: 70px; padding: 12px 14px; border: 1px solid #dfe2e5; border-radius: 8px; cursor: pointer; }
+    .wallet-option:has(input:checked) { border-color: #f47700; box-shadow: 0 0 0 1px #f47700; background: #fffaf5; }
+    .wallet-option input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: #e96d00; }
+    .wallet-copy { display: grid; gap: 4px; min-width: 0; font-size: 13px; }
+    .wallet-number { color: #626970; }
+    .wallet-balance { margin-left: auto; color: #41464b; font-size: 12px; text-align: right; }
+    .confirm-button { width: 100%; min-height: 48px; margin-top: 20px; padding: 12px 16px; border: 0; border-radius: 7px; background: #f47700; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+    .confirm-button:hover { background: #db6800; }
+    .confirm-button:focus-visible, .wallet-option:focus-within { outline: 3px solid #252525; outline-offset: 2px; }
+    .empty-state, .status-message { padding: 16px; border-radius: 8px; background: #f3f4f5; color: #50565c; font-size: 14px; line-height: 1.5; }
+    footer { padding: 15px 26px; border-top: 1px solid #eceef0; color: #71777d; font-size: 11px; line-height: 1.45; }
+    @media (max-width: 440px) { .brand, .content { padding-left: 18px; padding-right: 18px; } .payment-summary { align-items: flex-start; flex-direction: column; } .amount { text-align: left; } footer { padding-left: 18px; padding-right: 18px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="brand">
+      <div class="brand-name"><span class="brand-mark" aria-hidden="true"></span>Orange Money</div>
+      <span class="simulation">Paiement simulé</span>
+    </header>
+    <section class="content">
+      <h1>Confirmer le paiement</h1>
+      <p class="intro">Sélectionnez le compte Orange Money à utiliser pour cette transaction.</p>
+      <div class="payment-summary">
+        <div><span class="summary-label">Commande</span><strong class="order-id">${escapeHtml(input.orderId)}</strong></div>
+        <strong class="amount">${formatAmount(input.amount)} ${escapeHtml(input.currency)}</strong>
+      </div>
+      ${content}
+    </section>
+    <footer>Simulation de paiement pour environnement de développement. Aucun paiement réel ne sera effectué.</footer>
+  </main>
+</body>
+</html>`;
+};
+
 export const mockRoutes: FastifyPluginAsync = async (app) => {
-  app.addHook("onRequest", async (req, reply) => {
-    if (process.env.NODE_ENV !== "production" || /^\/__mock\/orange\/pay\/[a-f0-9]{64}(?:\/confirm)?(?:\?.*)?$/i.test(req.url)) return;
-
-    const expected = process.env.MOCK_ADMIN_TOKEN ?? "";
-    const authorization = req.headers.authorization ?? "";
-    const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-    const expectedBytes = Buffer.from(expected);
-    const suppliedBytes = Buffer.from(supplied);
-    if (expectedBytes.length === 0 || expectedBytes.length !== suppliedBytes.length || !timingSafeEqual(expectedBytes, suppliedBytes)) {
-      reply.code(401).send({ error: "UNAUTHORIZED", message: "Valid mock admin token required" });
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof MockError) {
+      return reply.code(error.statusCode).send({ error: "MOCK_ERROR", message: error.message });
     }
+    const statusCode = (error as { statusCode?: number }).statusCode ?? 500;
+    return reply.code(statusCode).send({ error: "MOCK_ERROR", message: error instanceof Error ? error.message : "Internal error" });
   });
 
-  app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof MockError) return reply.code(err.statusCode).send({ error: "MOCK_ERROR", message: err.message });
-    const status = (err as { statusCode?: number }).statusCode ?? 500;
-    return reply.code(status).send({ error: "MOCK_ERROR", message: (err as Error).message });
+  app.get("/__mock/orange/pay/:payToken", async (request, reply) => {
+    const payToken = (request.params as { payToken: string }).payToken;
+    const transaction = orangeByPayToken.get(payToken);
+    if (!transaction) throw new MockError(404, "Unknown pay_token");
+
+    const accounts = (await listAccounts())
+      .filter((account) => account.provider === "ORANGE_MONEY" && account.status === "ACTIVE")
+      .map(({ msisdn, balance, currency }) => ({ msisdn, balance, currency }));
+
+    return reply.type("text/html; charset=utf-8").send(checkoutPage({
+      payToken,
+      orderId: transaction.request.order_id,
+      amount: transaction.amount,
+      currency: transaction.request.currency,
+      status: transaction.status,
+      accounts,
+    }));
   });
 
-  app.get("/__mock/profiles", async () => listProfiles());
-
-  app.get("/__mock/profiles/:profile", async (req) => {
-    const p = getProfile((req.params as { profile: string }).profile);
-    if (!p) throw new MockError(404, "Unknown profile");
-    return p;
-  });
-
-  // Only way to restore a balance: back to the predefined initialBalance (no arbitrary balances).
-  app.post("/__mock/profiles/:profile/reset", async (req) => resetOne((req.params as { profile: string }).profile));
-
-  app.post("/__mock/reset", async (req) => {
-    const q = req.query as { transactions?: string; config?: string };
-    return resetEverything({ transactions: q.transactions === "true", config: q.config === "true" });
-  });
-
-  app.get("/__mock/config", async () => getConfig());
-  app.post("/__mock/config", async (req) => updateConfig(req.body));
-
-  // Inspection helper
-  app.get("/__mock/transactions", async () => ({
-    mvola: Array.from(mvolaByServerCorrelationId.values()).map((t) => ({
-      serverCorrelationId: t.serverCorrelationId,
-      transactionReference: t.transactionReference ?? null,
-      status: t.status,
-      amount: t.amount,
-      debitMsisdn: t.debitMsisdn,
-      profile: t.profileType,
-    })),
-    orangeMoney: Array.from(orangeByPayToken.values()).map((t) => ({
-      order_id: t.request.order_id,
-      pay_token: t.payToken,
-      status: t.status,
-      amount: t.amount,
-      txnid: t.txnid ?? null,
-      profile: t.profileType,
-    })),
-  }));
-
-  /* ---- Orange hosted payment page (stands in for Orange's real customer-facing page) ---- */
-
-  app.get("/__mock/orange/pay/:payToken", async (req, reply) => {
-    const tx = orangeByPayToken.get((req.params as { payToken: string }).payToken);
-    if (!tx) throw new MockError(404, "Unknown pay_token");
-    const buttons = listProfiles()
-      .filter((p) => p.provider === "ORANGE_MONEY")
-      .map(
-        (p) =>
-          `<button name="profile" value="${esc(p.type)}">${esc(p.type)} — ${esc(p.fakeMsisdn)} — balance ${p.balance} Ar</button>`,
-      )
-      .join("<br><br>");
-    return reply.type("text/html").send(`<!doctype html><html><head><meta charset="utf-8"><title>Mock Orange Money</title></head>
-<body style="font-family:sans-serif;max-width:560px;margin:40px auto">
-<h2>Mock Orange Money — hosted payment page</h2>
-<p><b>MOCK-ONLY.</b> Order <code>${esc(tx.request.order_id)}</code> — <b>${esc(tx.amount)}</b> ${esc(tx.request.currency)} — status <b>${esc(tx.status)}</b></p>
-<form method="POST" action="/__mock/orange/pay/${esc(tx.payToken)}/confirm">${buttons}</form>
-</body></html>`);
-  });
-
-  // JSON: { "profile": "ORANGE_MONEY_5" }  or  HTML form post (redirects to return_url)
-  app.post("/__mock/orange/pay/:payToken/confirm", async (req, reply) => {
-    const payToken = (req.params as { payToken: string }).payToken;
-    const profile = String(((req.body ?? {}) as Record<string, unknown>).profile ?? "");
-    const tx = confirmPayment(payToken, profile);
-    const isForm = String(req.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
-    if (isForm) return reply.redirect(tx.request.return_url, 303);
-    return { status: tx.status, order_id: tx.request.order_id, profile: tx.profileType };
+  app.post("/__mock/orange/pay/:payToken/confirm", async (request, reply) => {
+    const payToken = (request.params as { payToken: string }).payToken;
+    const msisdn = String(((request.body ?? {}) as Record<string, unknown>).msisdn ?? "");
+    const transaction = await confirmPayment(payToken, msisdn);
+    const isForm = String(request.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
+    if (isForm) return reply.redirect(transaction.request.return_url, 303);
+    return { status: transaction.status, order_id: transaction.request.order_id, msisdn: transaction.accountMsisdn };
   });
 };

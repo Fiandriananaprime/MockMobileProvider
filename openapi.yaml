@@ -3,8 +3,14 @@ info:
   title: mock-mobile-money-service
   version: 1.0.0
   description: |
-    Faux fournisseur **MVola** et **Orange Money** pour le développement local du Payment Service NovaMarket.
-    Tout l'état est en mémoire et perdu au redémarrage.
+    Faux fournisseur **MVola** et **Orange Money** pour le Payment Service NovaMarket. Les comptes et le ledger sont
+    persistés dans PostgreSQL; l'état technique des tokens provider et des transactions provider reste en mémoire.
+
+    L'API utilisateur et l'Admin API sont consommées depuis des frontends distincts configurés avec
+    `USER_FRONTEND_ORIGINS` et `ADMIN_FRONTEND_ORIGINS`. En production, les deux variables sont obligatoires et ne
+    peuvent pas contenir `*`. Les méthodes CORS sont GET, POST, PUT, PATCH, DELETE et OPTIONS; les headers autorisés
+    sont Content-Type et Authorization. Les routes provider ne dépendent pas du CORS navigateur. CORS n'authentifie
+    aucune requête.
 
     Légende des tags :
     - **MVola** / **Orange Money** : contrat reproduit depuis la documentation / les SDK publics (voir README pour les
@@ -19,12 +25,287 @@ tags:
     description: Merchant Pay v1 (sandbox réel https://devapi.mvola.mg, prod https://api.mvola.mg)
   - name: Orange Money
     description: WebPay (https://api.orange.com)
+  - name: User
+    description: Wallet utilisateur; le compte est toujours résolu depuis le token signé de l'utilisateur.
   - name: Mock
     description: |
-      MOCK-ONLY – jamais présent chez les vrais fournisseurs. En production, les routes d'administration `/__mock`
-      exigent `Authorization: Bearer <MOCK_ADMIN_TOKEN>`; la page et la confirmation Orange utilisent le `payToken`.
+      MOCK-ONLY – les seules routes sont la page de checkout Orange et sa confirmation, autorisées par le payToken.
+  - name: Admin
+    description: >-
+      API en lecture seule, protégée par `Authorization: Bearer <MOCK_ADMIN_TOKEN>` et destinée au frontend admin séparé.
 
 paths:
+  /auth/register:
+    post:
+      tags: [User]
+      operationId: registerUser
+      summary: Créer un wallet utilisateur
+      description: Le serveur génère un MSISDN unique selon les préfixes backend du provider. Le client ne peut pas choisir le MSISDN ni le solde.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+            example: { provider: MVOLA, password: secret123 }
+      responses:
+        "201":
+          description: Compte créé; le hash du mot de passe n'est jamais retourné.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountResponse" }
+              example: { provider: MVOLA, msisdn: "0341234567", balance: 0, currency: MGA, status: ACTIVE }
+        "400":
+          description: Provider ou mot de passe invalide
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: Impossible d'allouer un MSISDN unique
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /auth/login:
+    post:
+      tags: [User]
+      operationId: loginUser
+      summary: Authentifier un utilisateur
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+            example: { msisdn: "0341234567", password: secret123 }
+      responses:
+        "200":
+          description: Jeton d'accès utilisateur signé, distinct de MOCK_ADMIN_TOKEN
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accessToken, tokenType, expiresIn]
+                properties:
+                  accessToken: { type: string }
+                  tokenType: { type: string, enum: [Bearer] }
+                  expiresIn: { type: integer, example: 3600 }
+        "400":
+          description: Requête invalide
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: MSISDN ou mot de passe incorrect
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Compte bloqué
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /account:
+    get:
+      tags: [User]
+      operationId: getCurrentAccount
+      summary: Consulter son propre compte
+      description: Le compte est dérivé du sujet du token; aucun MSISDN de compte n'est accepté comme sélecteur.
+      security:
+        - userBearer: []
+      responses:
+        "200":
+          description: Compte authentifié
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountResponse" }
+        "401":
+          description: Token utilisateur absent, invalide ou expiré
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Compte bloqué
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /account/balance:
+    get:
+      tags: [User]
+      operationId: getCurrentBalance
+      summary: Consulter son solde
+      security:
+        - userBearer: []
+      responses:
+        "200":
+          description: Solde du compte authentifié
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BalanceResponse" }
+        "401":
+          description: Token utilisateur absent, invalide ou expiré
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Compte bloqué
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /account/transactions:
+    get:
+      tags: [User]
+      operationId: getCurrentAccountTransactions
+      summary: Lister les transactions de son compte
+      security:
+        - userBearer: []
+      responses:
+        "200":
+          description: Transactions du seul compte authentifié
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountTransactionListResponse" }
+        "401":
+          description: Token utilisateur absent, invalide ou expiré
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Compte bloqué
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /account/topup:
+    post:
+      tags: [User]
+      operationId: topUpCurrentAccount
+      summary: Créditer son compte
+      description: Les top-ups ne sont pas limités en nombre; chaque crédit atomique est refusé si le solde dépasserait MAX_BALANCE.
+      security:
+        - userBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TopUpRequest" }
+            example: { amount: 500000 }
+      responses:
+        "200":
+          description: Solde crédité et transaction TOPUP enregistrée
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountResponse" }
+        "400":
+          description: Montant invalide ou inférieur ou égal à zéro
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: Token utilisateur absent, invalide ou expiré
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Compte bloqué
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: Le solde maximal serait dépassé
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /account/reset:
+    post:
+      tags: [User]
+      operationId: resetCurrentAccount
+      summary: Remettre son propre solde à zéro
+      security:
+        - userBearer: []
+      responses:
+        "200":
+          description: Solde remis à zéro; une transaction RESET est créée
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountResponse" }
+        "401":
+          description: Token utilisateur absent, invalide ou expiré
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Compte bloqué
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /admin/accounts:
+    get:
+      tags: [Admin]
+      operationId: adminListAccounts
+      summary: Lister les comptes
+      security:
+        - adminBearer: []
+      responses:
+        "200":
+          description: Liste des comptes, sans hashes de mots de passe
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AccountResponse" }
+        "401":
+          description: Token admin absent ou invalide
+
+  /admin/accounts/{msisdn}:
+    get:
+      tags: [Admin]
+      operationId: adminGetAccount
+      summary: Consulter un compte
+      security:
+        - adminBearer: []
+      parameters:
+        - name: msisdn
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Compte
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountResponse" }
+        "401":
+          description: Token admin absent ou invalide
+        "404":
+          description: Compte inconnu
+
+  /admin/accounts/{msisdn}/transactions:
+    get:
+      tags: [Admin]
+      operationId: adminListAccountTransactions
+      summary: Lister les transactions d'un compte
+      security:
+        - adminBearer: []
+      parameters:
+        - name: msisdn
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Transactions du compte
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TransactionResponse" }
+        "401":
+          description: Token admin absent ou invalide
+
   /health:
     get:
       tags: [Mock]
@@ -105,8 +386,8 @@ paths:
         le statut final est `failed`. Le résultat s'obtient par polling (status) ou par callback si `X-Callback-URL`
         est envoyé (le mock fait alors un `PUT` vers cette URL).
 
-        Le profil fictif est déterminé par `debitParty.msisdn` (le `fakeMsisdn` du profil, ex. `03435000005`
-        pour MVOLA_5). Un MSISDN inconnu conduit à une transaction `failed`.
+        Le wallet débité est le compte PostgreSQL dont le MSISDN figure dans `debitParty`. Le compte doit exister,
+        être de provider `MVOLA`, être actif et disposer d'un solde suffisant.
       security:
         - bearerAuth: []
       parameters:
@@ -132,7 +413,7 @@ paths:
             schema: { $ref: "#/components/schemas/MvolaInitiateRequest" }
             examples:
               paiement500:
-                summary: 500 Ar depuis le profil MVOLA_5
+                summary: 500 Ar depuis un compte MVola existant
                 value:
                   amount: "500"
                   currency: Ar
@@ -141,7 +422,7 @@ paths:
                   originalTransactionReference: order-42-a1
                   requestDate: "2026-09-29T10:00:00.000Z"
                   debitParty:
-                    - { key: msisdn, value: "03435000005" }
+                    - { key: msisdn, value: "0341234567" }
                   creditParty:
                     - { key: msisdn, value: "0343500001" }
                   metadata:
@@ -149,7 +430,7 @@ paths:
                     - { key: fc, value: USD }
                     - { key: amountFc, value: "1" }
               soldeInsuffisant:
-                summary: 5000 Ar depuis MVOLA_1 (solde 1000) -> finira en failed
+                summary: Un MSISDN inconnu ou sans solde suffisant finit en failed
                 value:
                   amount: "5000"
                   currency: Ar
@@ -157,7 +438,7 @@ paths:
                   requestingOrganisationTransactionReference: order-43-a1
                   requestDate: "2026-09-29T10:00:00.000Z"
                   debitParty:
-                    - { key: msisdn, value: "03435000001" }
+                    - { key: msisdn, value: "0347654321" }
                   creditParty:
                     - { key: msisdn, value: "0343500001" }
       responses:
@@ -409,8 +690,8 @@ paths:
       summary: Initier un paiement WebPay
       description: |
         Retourne un `pay_token` et une `payment_url`. Ici `payment_url` pointe vers la page mock
-        `/__mock/orange/pay/{pay_token}`. Le client (simulé) y choisit un profil ORANGE_MONEY_n. Après confirmation,
-        le mock attend 1 seconde par défaut, puis règle le paiement : profil existant et solde suffisant donnent
+        `/__mock/orange/pay/{pay_token}`. Le client (simulé) y choisit un compte Orange Money existant. Après confirmation,
+        le mock attend 1 seconde par défaut, puis règle le paiement : compte actif et solde suffisant donnent
         90% de chances de `SUCCESS`; les autres résultats sont `FAILED`. Une notification est envoyée à `notif_url`.
       security:
         - bearerAuth: []
@@ -552,187 +833,13 @@ paths:
                 description: No transaction matches order_id, amount and pay_token (mock convention)
 
   # ------------------------------------------------------------------- Mock
-  /__mock/profiles:
-    get:
-      tags: [Mock]
-      operationId: mockListProfiles
-      summary: Lister les 10 profils
-      responses:
-        "200":
-          description: Les 10 profils avec leur solde courant
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/FakePhoneProfile" }
-              example:
-                - { type: MVOLA_1, provider: MVOLA, fakeMsisdn: "03435000001", initialBalance: 1000, balance: 1000 }
-                - { type: MVOLA_5, provider: MVOLA, fakeMsisdn: "03435000005", initialBalance: 1000000, balance: 999500 }
-                - { type: ORANGE_MONEY_2, provider: ORANGE_MONEY, fakeMsisdn: "03200000002", initialBalance: 5000, balance: 2500 }
-
-  /__mock/profiles/{profile}:
-    get:
-      tags: [Mock]
-      operationId: mockGetProfile
-      summary: Détail d'un profil
-      parameters:
-        - $ref: "#/components/parameters/ProfileParam"
-      responses:
-        "200":
-          description: Profil
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/FakePhoneProfile" }
-              example: { type: MVOLA_5, provider: MVOLA, fakeMsisdn: "03435000005", initialBalance: 1000000, balance: 999500 }
-        "404":
-          $ref: "#/components/responses/MockNotFound"
-
-  /__mock/profiles/{profile}/reset:
-    post:
-      tags: [Mock]
-      operationId: mockResetProfile
-      summary: Remettre le solde d'un profil à initialBalance
-      description: Ne pas envoyer de Content-Type (pas de body).
-      parameters:
-        - $ref: "#/components/parameters/ProfileParam"
-      responses:
-        "200":
-          description: Profil réinitialisé
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/FakePhoneProfile" }
-              example: { type: MVOLA_5, provider: MVOLA, fakeMsisdn: "03435000005", initialBalance: 1000000, balance: 1000000 }
-        "404":
-          $ref: "#/components/responses/MockNotFound"
-
-  /__mock/reset:
-    post:
-      tags: [Mock]
-      operationId: mockResetAll
-      summary: Réinitialiser les 10 profils
-      parameters:
-        - name: transactions
-          in: query
-          description: Vide aussi les transactions en mémoire
-          schema: { type: boolean, default: false }
-        - name: config
-          in: query
-          description: Restaure aussi la configuration par défaut
-          schema: { type: boolean, default: false }
-      responses:
-        "200":
-          description: Les 10 profils réinitialisés
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/FakePhoneProfile" }
-              example:
-                - { type: MVOLA_1, provider: MVOLA, fakeMsisdn: "03435000001", initialBalance: 1000, balance: 1000 }
-                - { type: ORANGE_MONEY_5, provider: ORANGE_MONEY, fakeMsisdn: "03200000005", initialBalance: 1000000, balance: 1000000 }
-
-  /__mock/config:
-    get:
-      tags: [Mock]
-      operationId: mockGetConfig
-      summary: Lire la configuration
-      responses:
-        "200":
-          description: Configuration courante
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/MockConfig" }
-              example: { scenario: success, settleDelayMs: 1000, timeoutMs: 30000, orangeAutoProfile: null }
-    post:
-      tags: [Mock]
-      operationId: mockUpdateConfig
-      summary: Modifier la configuration (champs partiels)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/MockConfigUpdate" }
-            examples:
-              insuffisant:
-                value: { scenario: insufficient_balance }
-              pending:
-                value: { scenario: always_pending }
-              rapideAutoOrange:
-                summary: Règlement rapide + Orange auto-confirmé avec ORANGE_MONEY_5
-                value: { scenario: success, settleDelayMs: 500, orangeAutoProfile: ORANGE_MONEY_5 }
-      responses:
-        "200":
-          description: Configuration mise à jour
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/MockConfig" }
-              example: { scenario: success, settleDelayMs: 500, timeoutMs: 30000, orangeAutoProfile: ORANGE_MONEY_5 }
-        "400":
-          description: Valeur invalide
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/MockError" }
-              example:
-                error: MOCK_ERROR
-                message: "scenario must be one of success, insufficient_balance, provider_error, timeout, always_pending"
-
-  /__mock/transactions:
-    get:
-      tags: [Mock]
-      operationId: mockListTransactions
-      summary: Inspecter les transactions en mémoire
-      responses:
-        "200":
-          description: Transactions des deux fournisseurs
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  mvola:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        serverCorrelationId: { type: string, format: uuid }
-                        transactionReference: { type: string, nullable: true }
-                        status: { $ref: "#/components/schemas/MvolaStatus" }
-                        amount: { type: number }
-                        debitMsisdn: { type: string }
-                        profile: { type: string, nullable: true }
-                  orangeMoney:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        order_id: { type: string }
-                        pay_token: { type: string }
-                        status: { $ref: "#/components/schemas/OrangeStatus" }
-                        amount: { type: number }
-                        txnid: { type: string, nullable: true }
-                        profile: { type: string, nullable: true }
-              example:
-                mvola:
-                  - serverCorrelationId: 6747819c-bcae-4c0c-ba82-1b6c854ade1d
-                    transactionReference: "899944982"
-                    status: completed
-                    amount: 500
-                    debitMsisdn: "03435000005"
-                    profile: MVOLA_5
-                orangeMoney:
-                  - order_id: ORD-42
-                    pay_token: 34370449153816847b025111f7d88d5af349552043051577486d1962d6eceaf3
-                    status: SUCCESS
-                    amount: 2500
-                    txnid: MP260929.1148.D333D
-                    profile: ORANGE_MONEY_2
-
+  
   /__mock/orange/pay/{payToken}:
     get:
       tags: [Mock]
       operationId: mockOrangeHostedPage
       summary: Page de paiement Orange simulée (HTML)
-      description: Remplace la page hébergée réelle d'Orange. Affiche les 5 profils ORANGE_MONEY_n.
+      description: Remplace la page hébergée réelle d'Orange. Affiche les comptes Orange Money existants et actifs.
       parameters:
         - $ref: "#/components/parameters/PayToken"
       responses:
@@ -748,7 +855,7 @@ paths:
     post:
       tags: [Mock]
       operationId: mockOrangeConfirm
-      summary: Simuler le client qui confirme le paiement avec un profil
+      summary: Simuler le client qui confirme avec un compte Orange Money
       description: |
         Passe la transaction de INITIATED à PENDING puis la règle après `settleDelayMs`.
         Depuis le formulaire HTML (form-urlencoded) : redirection 303 vers `return_url`.
@@ -760,19 +867,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [profile]
+              required: [msisdn]
               properties:
-                profile:
+                msisdn:
                   type: string
-                  pattern: "^ORANGE_MONEY_[1-5]$"
+                  pattern: "^\\d{10}$"
             example:
-              profile: ORANGE_MONEY_5
+              msisdn: "0321234567"
           application/x-www-form-urlencoded:
             schema:
               type: object
-              required: [profile]
+              required: [msisdn]
               properties:
-                profile: { type: string }
+                msisdn: { type: string, pattern: "^\\d{10}$" }
       responses:
         "200":
           description: Transaction passée à PENDING
@@ -780,19 +887,20 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [status, order_id, msisdn]
                 properties:
                   status: { $ref: "#/components/schemas/OrangeStatus" }
                   order_id: { type: string }
-                  profile: { type: string }
-              example: { status: PENDING, order_id: ORD-42, profile: ORANGE_MONEY_5 }
+                  msisdn: { type: string }
+              example: { status: PENDING, order_id: ORD-42, msisdn: "0321234567" }
         "303":
           description: Redirection vers return_url (soumission du formulaire HTML)
         "400":
-          description: Profil qui n'est pas un ORANGE_MONEY_n
+          description: MSISDN inconnu ou qui ne correspond pas à un compte Orange Money
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MockError" }
-              example: { error: MOCK_ERROR, message: MVOLA_1 is not an ORANGE_MONEY profile }
+              example: { error: MOCK_ERROR, message: "0321234567 is not an existing ORANGE_MONEY account" }
         "404":
           $ref: "#/components/responses/MockNotFound"
         "409":
@@ -805,6 +913,16 @@ paths:
 # ====================================================================
 components:
   securitySchemes:
+    userBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Jeton utilisateur signé avec USER_AUTH_SECRET, distinct de MOCK_ADMIN_TOKEN.
+    adminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Valeur de `MOCK_ADMIN_TOKEN`.
     basicAuth:
       type: http
       scheme: basic
@@ -865,14 +983,6 @@ components:
       description: "`dev` = sandbox (documenté). `mg` = production Madagascar (ASSUMPTION)."
       schema: { type: string, enum: [dev, mg] }
       example: mg
-    ProfileParam:
-      name: profile
-      in: path
-      required: true
-      schema:
-        type: string
-        enum: [MVOLA_1, MVOLA_2, MVOLA_3, MVOLA_4, MVOLA_5, ORANGE_MONEY_1, ORANGE_MONEY_2, ORANGE_MONEY_3, ORANGE_MONEY_4, ORANGE_MONEY_5]
-      example: MVOLA_5
     PayToken:
       name: payToken
       in: path
@@ -932,13 +1042,78 @@ components:
             message: Invalid token
             description: Invalid or expired access token (mock convention)
     MockNotFound:
-      description: Profil ou pay_token inconnu
+      description: Compte ou pay_token inconnu
       content:
         application/json:
           schema: { $ref: "#/components/schemas/MockError" }
-          example: { error: MOCK_ERROR, message: Unknown profile }
+          example: { error: MOCK_ERROR, message: Unknown account }
 
   schemas:
+    RegisterRequest:
+      type: object
+      required: [provider, password]
+      additionalProperties: false
+      properties:
+        provider: { type: string, enum: [MVOLA, ORANGE_MONEY] }
+        password: { type: string, minLength: 8, maxLength: 128, format: password }
+    LoginRequest:
+      type: object
+      required: [msisdn, password]
+      additionalProperties: false
+      properties:
+        msisdn: { type: string, pattern: "^\\d{10}$" }
+        password: { type: string, minLength: 8, maxLength: 128, format: password }
+    AccountResponse:
+      type: object
+      required: [provider, msisdn, balance, currency, status]
+      properties:
+        provider: { type: string, enum: [MVOLA, ORANGE_MONEY] }
+        msisdn: { type: string, pattern: "^\\d{10}$" }
+        balance: { type: number, minimum: 0 }
+        currency: { type: string, example: MGA }
+        status: { type: string, enum: [ACTIVE, BLOCKED] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    BalanceResponse:
+      type: object
+      required: [balance, currency]
+      properties:
+        balance: { type: number, minimum: 0 }
+        currency: { type: string, example: MGA }
+    TopUpRequest:
+      type: object
+      required: [amount]
+      additionalProperties: false
+      properties:
+        amount: { type: number, minimum: 0, exclusiveMinimum: true }
+    TransactionResponse:
+      type: object
+      required: [id, accountId, provider, type, amount, currency, status, reference, balanceBefore, balanceAfter, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        provider: { type: string, enum: [MVOLA, ORANGE_MONEY] }
+        type: { type: string, enum: [PAYMENT, TOPUP, RESET, REFUND] }
+        amount: { type: number, minimum: 0 }
+        currency: { type: string }
+        status: { type: string, enum: [SUCCESS, FAILED] }
+        reference: { type: string }
+        balanceBefore: { type: number, minimum: 0 }
+        balanceAfter: { type: number, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+    AccountTransactionListResponse:
+      type: object
+      required: [transactions]
+      properties:
+        transactions:
+          type: array
+          items: { $ref: "#/components/schemas/TransactionResponse" }
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string }
+        message: { type: string }
     # ---- MVola
     KeyValue:
       type: object
@@ -965,7 +1140,7 @@ components:
         requestDate: { type: string, format: date-time }
         debitParty:
           type: array
-          description: Client. Pour le mock, msisdn = fakeMsisdn d'un profil MVOLA_n.
+          description: Client. Pour le mock, msisdn doit correspondre à un wallet MVola persistant existant.
           items: { $ref: "#/components/schemas/KeyValue" }
         creditParty:
           type: array
@@ -1112,39 +1287,7 @@ components:
         message: { type: string }
         description: { type: string }
 
-    # ---- Mock
-    FakePhoneProfile:
-      type: object
-      properties:
-        type:
-          type: string
-          enum: [MVOLA_1, MVOLA_2, MVOLA_3, MVOLA_4, MVOLA_5, ORANGE_MONEY_1, ORANGE_MONEY_2, ORANGE_MONEY_3, ORANGE_MONEY_4, ORANGE_MONEY_5]
-        provider: { type: string, enum: [MVOLA, ORANGE_MONEY] }
-        fakeMsisdn: { type: string, description: "Numéro fictif, jamais le numéro réel de l'utilisateur" }
-        initialBalance: { type: number, description: Ne change jamais }
-        balance: { type: number, description: "Solde courant, baisse à chaque paiement réussi" }
-    MockConfig:
-      type: object
-      properties:
-        scenario: { $ref: "#/components/schemas/Scenario" }
-        settleDelayMs: { type: integer, minimum: 0, default: 1000 }
-        timeoutMs: { type: integer, minimum: 0, default: 30000 }
-        orangeAutoProfile: { type: string, nullable: true, pattern: "^ORANGE_MONEY_[1-5]$" }
-    MockConfigUpdate:
-      type: object
-      properties:
-        scenario: { $ref: "#/components/schemas/Scenario" }
-        settleDelayMs: { type: integer, minimum: 0 }
-        timeoutMs: { type: integer, minimum: 0 }
-        orangeAutoProfile: { type: string, nullable: true, pattern: "^ORANGE_MONEY_[1-5]$" }
-    Scenario:
-      type: string
-      enum: [success, insufficient_balance, provider_error, timeout, always_pending]
-      description: |
-        success : après settleDelayMs (1000 ms par défaut), un paiement avec compte connu et solde suffisant réussit
-        avec 90% de probabilité; sinon il échoue. insufficient_balance : tout échoue.
-        provider_error : initiation en 5xx. timeout : initiation en 504 après timeoutMs.
-        always_pending : ne se règle jamais.
+    # ---- Mock checkout errors
     MockError:
       type: object
       properties:

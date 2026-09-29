@@ -2,9 +2,9 @@ import type { IncomingHttpHeaders } from "node:http";
 import { MockError, ProviderHttpError } from "../../shared/errors.js";
 import { orangeTxnId, randomHex } from "../../shared/ids.js";
 import { isCallbackUrlAllowed } from "../../shared/callback-url.js";
-import { constantTimeEqual } from "../../shared/secrets.js";
+import { constantTimeEqual, parseAuthorizationHeader } from "../../shared/secrets.js";
+import { getAccountByMsisdn, settleWalletPayment } from "../../db.js";
 import { getConfig, paymentSucceeds } from "../../mock/mock.service.js";
-import { debitProfile, getProfile } from "../../mock/profiles.js";
 import { orangeByNotifToken, orangeByPayToken, orangePayTokenByOrderId, orangeTokens } from "./orange.store.js";
 import {
   OrangeTransaction,
@@ -35,9 +35,11 @@ const publicBaseUrl = (): string => {
 export function handleTokenRequest(headers: IncomingHttpHeaders, body: unknown) {
   const auth = String(headers.authorization ?? "");
   const expectedAuth = process.env.NODE_ENV === "production" ? process.env.ORANGE_BASIC_AUTH ?? "" : undefined;
+  const basicHeaderValue = parseAuthorizationHeader(auth, "Basic");
+  const expectedHeaderValue = expectedAuth ? parseAuthorizationHeader(expectedAuth, "Basic") : "";
   const validCredentials = expectedAuth === undefined
-    ? auth.startsWith("Basic ") && auth.length >= 8
-    : Boolean(expectedAuth) && constantTimeEqual(auth, expectedAuth);
+    ? Boolean(basicHeaderValue)
+    : Boolean(expectedAuth) && constantTimeEqual(basicHeaderValue, expectedHeaderValue);
   if (!validCredentials) {
     throw new ProviderHttpError(401, {
       error: "invalid_client",
@@ -58,7 +60,7 @@ export function handleTokenRequest(headers: IncomingHttpHeaders, body: unknown) 
 
 function checkBearer(headers: IncomingHttpHeaders): void {
   const auth = String(headers.authorization ?? "");
-  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const token = parseAuthorizationHeader(auth, "Bearer");
   const expiry = orangeTokens.get(token);
   if (!token || !expiry || expiry < Date.now()) throw orangeInvalidToken();
 }
@@ -99,16 +101,13 @@ export async function createWebPayment(headers: IncomingHttpHeaders, body: unkno
     request: b as unknown as OrangeWebPaymentRequest,
     amount,
     status: "INITIATED",
-    profileType: null,
+    accountMsisdn: null,
     createdAt: Date.now(),
     expiresAt: Date.now() + PAY_TOKEN_VALIDITY_MS,
   };
   orangeByPayToken.set(tx.payToken, tx);
   orangeByNotifToken.set(tx.notifToken, tx);
   orangePayTokenByOrderId.set(tx.request.order_id, tx.payToken);
-
-  // MOCK-ONLY convenience: skip the hosted page and pay with a preset profile.
-  if (cfg.orangeAutoProfile) confirmPayment(tx.payToken, cfg.orangeAutoProfile);
 
   return {
     status: 201,
@@ -147,18 +146,21 @@ export function getTransactionStatus(headers: IncomingHttpHeaders, body: unknown
 
 /* ------------------------------------------------- MOCK-ONLY: customer step */
 
-/** Simulates the customer choosing a fake wallet on the hosted page and pressing "Confirm". */
-export function confirmPayment(payToken: string, profileType: string): OrangeTransaction {
+/** Simulates the customer selecting their existing Orange Money wallet on the hosted page. */
+export async function confirmPayment(payToken: string, msisdn: string): Promise<OrangeTransaction> {
   const tx = orangeByPayToken.get(payToken);
   if (!tx) throw new MockError(404, "Unknown pay_token");
-  const profile = getProfile(profileType);
-  if (!profile || profile.provider !== "ORANGE_MONEY") {
-    throw new MockError(400, `${profileType} is not an ORANGE_MONEY profile`);
+  const account = await getAccountByMsisdn(msisdn);
+  if (!account || account.provider !== "ORANGE_MONEY") {
+    throw new MockError(400, `${msisdn} is not an existing ORANGE_MONEY account`);
+  }
+  if (account.status === "BLOCKED") {
+    throw new MockError(409, `Account ${account.msisdn} is blocked`);
   }
   refreshExpiry(tx);
   if (tx.status !== "INITIATED") throw new MockError(409, `Transaction is ${tx.status}, cannot confirm`);
 
-  tx.profileType = profile.type;
+  tx.accountMsisdn = account.msisdn;
   tx.status = "PENDING"; // OFFICIAL: user clicked "Confirmer"
   const cfg = getConfig();
   if (cfg.scenario !== "always_pending") setTimeout(() => void settle(tx), cfg.settleDelayMs).unref();
@@ -167,14 +169,19 @@ export function confirmPayment(payToken: string, profileType: string): OrangeTra
 
 async function settle(tx: OrangeTransaction): Promise<void> {
   const cfg = getConfig();
-  const profile = tx.profileType ? getProfile(tx.profileType) : undefined;
-  if (profile && cfg.scenario !== "insufficient_balance" && tx.amount <= profile.balance && paymentSucceeds()) {
-    debitProfile(profile.type, tx.amount);
-    tx.status = "SUCCESS";
-    tx.txnid = orangeTxnId();
-  } else {
-    tx.status = "FAILED";
-  }
+  const reference = orangeTxnId();
+  const result = tx.accountMsisdn
+    ? await settleWalletPayment({
+      provider: "ORANGE_MONEY",
+      msisdn: cfg.scenario === "account_not_found" ? "0000000000" : tx.accountMsisdn,
+      amount: tx.amount,
+      reference,
+      allowPayment: cfg.scenario !== "insufficient_balance" && paymentSucceeds(),
+      forceBlocked: cfg.scenario === "account_blocked",
+    })
+    : { success: false as const };
+  tx.status = result.success ? "SUCCESS" : "FAILED";
+  if (result.success) tx.txnid = reference;
   // OFFICIAL (observed): Orange POSTs { status, notif_token, txnid } to notif_url.
   try {
     await fetch(tx.request.notif_url, {

@@ -29,7 +29,7 @@ export interface MvolaTransaction {
   amount: number;
   debitMsisdn: string;
   creditMsisdn: string;
-  profileType: string | null; // mock-internal: which fake profile paid
+  walletMsisdn: string | null;
   createDate: string;
   fee: string;
   resultCode: string; // mock-internal, exposed as metadata/originalTransactionResult

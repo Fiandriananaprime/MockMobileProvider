@@ -2,9 +2,9 @@ import type { IncomingHttpHeaders } from "node:http";
 import { ProviderHttpError } from "../../shared/errors.js";
 import { numericReference, randomHex, uuid } from "../../shared/ids.js";
 import { isCallbackUrlAllowed } from "../../shared/callback-url.js";
-import { constantTimeEqual } from "../../shared/secrets.js";
+import { constantTimeEqual, parseAuthorizationHeader } from "../../shared/secrets.js";
+import { settleWalletPayment } from "../../db.js";
 import { getConfig, paymentSucceeds } from "../../mock/mock.service.js";
-import { debitProfile, findProfileByMsisdn } from "../../mock/profiles.js";
 import {
   mvolaByPartnerReference,
   mvolaByServerCorrelationId,
@@ -35,13 +35,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export function handleTokenRequest(headers: IncomingHttpHeaders, body: unknown): MvolaTokenResponse {
   const auth = String(headers.authorization ?? "");
-  const decoded = auth.startsWith("Basic ") ? Buffer.from(auth.slice(6), "base64").toString("utf8") : "";
+  const decoded = parseAuthorizationHeader(auth, "Basic");
+  const decodedCredentials = decoded ? Buffer.from(decoded, "base64").toString("utf8") : "";
   const productionCredentials = process.env.NODE_ENV === "production"
     ? `${process.env.MVOLA_CLIENT_KEY ?? ""}:${process.env.MVOLA_CLIENT_SECRET ?? ""}`
     : undefined;
   const validCredentials = productionCredentials === undefined
-    ? decoded.includes(":") && decoded.length >= 3
-    : Boolean(process.env.MVOLA_CLIENT_KEY && process.env.MVOLA_CLIENT_SECRET) && constantTimeEqual(decoded, productionCredentials);
+    ? decodedCredentials.includes(":") && decodedCredentials.length >= 3
+    : Boolean(process.env.MVOLA_CLIENT_KEY && process.env.MVOLA_CLIENT_SECRET) && constantTimeEqual(decodedCredentials, productionCredentials);
   if (!validCredentials) {
     throw new ProviderHttpError(401, {
       error: "invalid_client",
@@ -67,7 +68,7 @@ export function handleTokenRequest(headers: IncomingHttpHeaders, body: unknown):
 
 function checkBearer(headers: IncomingHttpHeaders): void {
   const auth = String(headers.authorization ?? "");
-  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const token = parseAuthorizationHeader(auth, "Bearer");
   const expiry = mvolaTokens.get(token);
   if (!token || !expiry || expiry < Date.now()) throw mvolaInvalidCredentials();
 }
@@ -198,7 +199,7 @@ export async function initiatePayment(headers: IncomingHttpHeaders, body: unknow
     amount,
     debitMsisdn: debit,
     creditMsisdn: credit,
-    profileType: null,
+    walletMsisdn: null,
     createDate: new Date().toISOString(),
     fee: "0",
     resultCode: "",
@@ -209,7 +210,7 @@ export async function initiatePayment(headers: IncomingHttpHeaders, body: unknow
   mvolaByPartnerReference.set(ref, tx.serverCorrelationId);
 
   if (cfg.scenario !== "always_pending") {
-    setTimeout(() => void settle(tx), cfg.settleDelayMs).unref();
+    setTimeout(() => void settle(tx).catch((error) => console.error("[mvola] settlement failed:", error)), cfg.settleDelayMs).unref();
   }
 
   // OFFICIAL body: status (static "pending"), serverCorrelationId, notificationMethod.
@@ -225,28 +226,33 @@ export async function initiatePayment(headers: IncomingHttpHeaders, body: unknow
  */
 async function settle(tx: MvolaTransaction): Promise<void> {
   const cfg = getConfig();
-  const profile = findProfileByMsisdn("MVOLA", tx.debitMsisdn);
-  let ok = false;
-  if (!profile) {
-    tx.resultCode = "1002";
-    tx.resultDesc = "Debit account not found (mock)";
-  } else if (cfg.scenario === "insufficient_balance" || tx.amount > profile.balance) {
-    tx.profileType = profile.type;
-    tx.resultCode = "1001";
-    tx.resultDesc = "Insufficient funds";
-  } else if (!paymentSucceeds()) {
-    tx.profileType = profile.type;
-    tx.resultCode = "1003";
-    tx.resultDesc = "Payment declined (mock random failure)";
-  } else {
-    tx.profileType = profile.type;
-    debitProfile(profile.type, tx.amount);
-    ok = true;
+  tx.transactionReference = numericReference(9);
+  const result = await settleWalletPayment({
+    provider: "MVOLA",
+    msisdn: cfg.scenario === "account_not_found" ? "0000000000" : tx.debitMsisdn,
+    amount: tx.amount,
+    reference: tx.transactionReference,
+    allowPayment: cfg.scenario !== "insufficient_balance" && paymentSucceeds(),
+    forceBlocked: cfg.scenario === "account_blocked",
+  });
+  tx.walletMsisdn = result.account?.msisdn ?? null;
+  tx.status = result.success ? "completed" : "failed";
+  if (result.success) {
     tx.resultCode = "0";
     tx.resultDesc = "Completed";
+  } else if (result.failure === "INSUFFICIENT_BALANCE") {
+    tx.resultCode = "1001";
+    tx.resultDesc = "Insufficient funds";
+  } else if (result.failure === "DECLINED") {
+    tx.resultCode = "1003";
+    tx.resultDesc = "Payment declined (mock random failure)";
+  } else if (result.failure === "ACCOUNT_BLOCKED") {
+    tx.resultCode = "1002";
+    tx.resultDesc = "Debit account blocked (mock)";
+  } else {
+    tx.resultCode = "1002";
+    tx.resultDesc = "Debit account not found or provider mismatch (mock)";
   }
-  tx.status = ok ? "completed" : "failed";
-  tx.transactionReference = numericReference(9);
   mvolaByTransactionReference.set(tx.transactionReference, tx);
   await sendCallback(tx);
 }

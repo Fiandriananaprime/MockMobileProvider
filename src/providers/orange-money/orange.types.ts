@@ -23,7 +23,7 @@ export interface OrangeTransaction {
   amount: number;
   status: OrangeStatus;
   txnid?: string;
-  profileType: string | null; // MOCK-ONLY: which fake profile paid on the hosted page
+  accountMsisdn: string | null;
   createdAt: number;
   expiresAt: number;
 }

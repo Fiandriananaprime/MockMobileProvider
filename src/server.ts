@@ -1,21 +1,63 @@
+import "dotenv/config";
 import Fastify from "fastify";
+import cors from "@fastify/cors";
 import formbody from "@fastify/formbody";
 import { pathToFileURL } from "node:url";
+import { accountRoutes } from "./accounts/account.routes.js";
+import { authRoutes } from "./auth/auth.routes.js";
+import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
+import { closeDatabase, ensureDatabaseReady } from "./db.js";
+import { ApiError } from "./shared/errors.js";
+import { adminRoutes } from "./admin/admin.routes.js";
 import { mvolaRoutes } from "./providers/mvola/mvola.routes.js";
 import { orangeRoutes } from "./providers/orange-money/orange.routes.js";
 import { mockRoutes } from "./mock/mock.routes.js";
 
-export async function buildServer() {
+export async function buildServer(config: RuntimeConfig = loadRuntimeConfig()) {
+  await ensureDatabaseReady(config);
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
+
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ApiError) {
+      return reply.code(error.statusCode).send({ error: error.code, message: error.message });
+    }
+    const statusCode = (error as { statusCode?: number }).statusCode ?? 500;
+    const message = error instanceof Error ? error.message : "Internal error";
+    return reply.code(statusCode).send({ error: statusCode >= 500 ? "INTERNAL_ERROR" : "BAD_REQUEST", message });
+  });
+
+  await app.register(cors, {
+    delegator: (request, callback) => {
+      const isAdminApi = request.url.startsWith("/admin/");
+      const isUserApi = request.url.startsWith("/auth/") || request.url === "/account" || request.url.startsWith("/account/");
+      const allowedOrigins = isAdminApi
+        ? config.adminFrontendOrigins
+        : isUserApi
+          ? config.userFrontendOrigins
+          : [];
+      callback(null, {
+        origin: (origin, originCallback) => originCallback(null, Boolean(origin && allowedOrigins.includes(origin))),
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+        credentials: false,
+      });
+    },
+  });
+
   app.get("/health", async () => ({ status: "ok" }));
-  await app.register(formbody); // /token and /oauth/v3/token are form-encoded
+  await app.register(formbody);
+  await app.register(authRoutes);
+  await app.register(accountRoutes);
+  await app.register(adminRoutes);
   await app.register(mvolaRoutes);
   await app.register(orangeRoutes);
   await app.register(mockRoutes);
+  app.addHook("onClose", closeDatabase);
   return app;
 }
 
 async function start(): Promise<void> {
+  const config = loadRuntimeConfig();
   const adminToken = process.env.MOCK_ADMIN_TOKEN ?? "";
   if (process.env.NODE_ENV === "production" && Buffer.byteLength(adminToken, "utf8") < 32) {
     throw new Error("MOCK_ADMIN_TOKEN must contain at least 32 bytes when NODE_ENV=production");
@@ -33,7 +75,7 @@ async function start(): Promise<void> {
   if (process.env.NODE_ENV === "production") {
     const publicBaseUrl = process.env.PUBLIC_BASE_URL ??
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-    let publicUrl: URL | undefined;
+    let publicUrl: URL;
     try {
       publicUrl = new URL(publicBaseUrl);
     } catch {
@@ -49,7 +91,7 @@ async function start(): Promise<void> {
     throw new Error("PORT must be an integer between 1 and 65535");
   }
 
-  const app = await buildServer();
+  const app = await buildServer(config);
   await app.listen({ port, host: process.env.HOST ?? "0.0.0.0" });
 
   let shuttingDown = false;
