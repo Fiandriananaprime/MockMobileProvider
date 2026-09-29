@@ -4,6 +4,7 @@ import { after, before, test } from "node:test";
 import { Pool } from "pg";
 import { buildServer } from "../dist/server.js";
 import { configureMock } from "../dist/mock/mock.service.js";
+import { runDatabaseMigrations } from "../dist/migrations.js";
 
 const adminToken = "test-admin-token-012345678901234567890";
 const userSecret = "test-user-auth-secret-with-at-least-32-bytes";
@@ -214,6 +215,16 @@ test("registration generates unique provider numbers and stores only password ha
   const stored = await database.query("SELECT password_hash FROM mock_accounts WHERE msisdn = $1", [mvola.msisdn]);
   assert.match(stored.rows[0].password_hash, /^scrypt\$16384\$/);
   assert.notEqual(stored.rows[0].password_hash, "secret123");
+});
+
+test("deployment migration runner records applied migrations and is safe to rerun", async () => {
+  const results = await Promise.all([
+    runDatabaseMigrations(database),
+    runDatabaseMigrations(database),
+  ]);
+  assert.deepEqual(results, [[], []]);
+  const recorded = await database.query("SELECT name FROM schema_migrations ORDER BY name");
+  assert.deepEqual(recorded.rows.map((row) => row.name), ["001_mock_user_accounts.sql"]);
 });
 
 test("login issues a user-only token and account identity comes from that token", async () => {

@@ -1,9 +1,8 @@
 import { randomInt, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import type { ProviderType, RuntimeConfig } from "./config.js";
 import { ApiError } from "./shared/errors.js";
+import { runDatabaseMigrations } from "./migrations.js";
 
 export type AccountStatus = "ACTIVE" | "BLOCKED";
 export type LedgerType = "PAYMENT" | "TOPUP" | "RESET" | "REFUND";
@@ -84,9 +83,8 @@ export async function ensureDatabaseReady(config: RuntimeConfig): Promise<void> 
   if (!initialization) {
     initialization = (async () => {
       pool = new Pool({ connectionString: config.databaseUrl });
-      const migrationPath = path.resolve(process.cwd(), "database", "migrations", "001_mock_user_accounts.sql");
       try {
-        await pool.query(await readFile(migrationPath, "utf8"));
+        await runDatabaseMigrations(pool);
       } catch (error) {
         await pool.end();
         pool = undefined;

@@ -6,8 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "db:migrate": "node dist/migrate.js",
+    "prestart": "npm run db:migrate",
     "start": "node dist/server.js",
     "build": "tsc -p .",
+    "vercel-build": "npm run build && npm run db:migrate",
     "typecheck": "tsc --noEmit -p .",
     "test": "npm run build && node --test"
   },

@@ -76,6 +76,16 @@ The repository includes the final PostgreSQL schema at `database/schema.sql` and
 
 The app applies the migration at startup and does not fall back to in-memory account storage. Provider debits, top-ups and resets lock the account row and write the balance change and ledger record in one PostgreSQL transaction.
 
+Deployment commands:
+
+```bash
+npm run build
+npm run db:migrate
+npm start
+```
+
+`npm start` runs `prestart`, which applies any pending SQL files from `database/migrations/` before launching the server. The Vercel `vercel-build` hook also builds and applies migrations. Server startup repeats the idempotent migration check for serverless cold starts; PostgreSQL advisory locking and the `schema_migrations` ledger prevent duplicate concurrent application.
+
 ---
 
 ## Architecture

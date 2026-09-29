@@ -1,3 +1,8 @@
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  name TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS mock_accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   provider TEXT NOT NULL CHECK (provider IN ('MVOLA', 'ORANGE_MONEY')),
