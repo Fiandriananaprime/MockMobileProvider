@@ -1,4 +1,5 @@
 import "dotenv/config";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import formbody from "@fastify/formbody";
@@ -109,6 +110,26 @@ async function start(): Promise<void> {
 
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+let serverlessAppPromise: ReturnType<typeof buildServer> | undefined;
+
+export default async function serverlessHandler(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  try {
+    serverlessAppPromise ??= buildServer();
+    const app = await serverlessAppPromise;
+    await app.ready();
+    app.server.emit("request", request, response);
+  } catch (error) {
+    serverlessAppPromise = undefined;
+    const message = error instanceof Error ? error.message : "Internal server error";
+    response.statusCode = 500;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(JSON.stringify({ error: "INTERNAL_ERROR", message }));
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
