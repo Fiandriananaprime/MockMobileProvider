@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import formbody from "@fastify/formbody";
+import { pathToFileURL } from "node:url";
 import { mvolaRoutes } from "./providers/mvola/mvola.routes.js";
 import { orangeRoutes } from "./providers/orange-money/orange.routes.js";
 import { mockRoutes } from "./mock/mock.routes.js";
@@ -13,7 +14,7 @@ export async function buildServer() {
   return app;
 }
 
-if (require.main === module) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? 4010);
   buildServer()
     .then((app) => app.listen({ port, host: "0.0.0.0" }))
