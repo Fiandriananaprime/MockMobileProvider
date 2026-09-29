@@ -31,6 +31,10 @@ Production example: Mock Provider `https://mock-provider.example.com`, User Fron
 
 Production requires a public HTTPS `PUBLIC_BASE_URL` (Vercel's `VERCEL_URL` is a fallback), `USER_AUTH_SECRET`, a `MOCK_ADMIN_TOKEN` of at least 32 bytes, `DATABASE_URL`, both frontend origin variables, MVola/Orange provider credentials, and a non-empty `CALLBACK_ALLOWED_HOSTS` allowlist. `/health` is unauthenticated. Admin `/admin/*` routes require `Authorization: Bearer <MOCK_ADMIN_TOKEN>`; user routes use a distinct JWT. Orange hosted payment uses its `payToken` capability. Build with `npm ci`, run `npm test`, then `npm start`.
 
+### Vercel deployment
+
+Vercel serves the API through `api/index.js`, which exports a Node.js request handler and forwards root paths to Fastify. `vercel.json` runs `npm run vercel-build` and rewrites requests to that handler. In Vercel Project Settings, keep the repository root as **Root Directory** and leave **Output Directory** unset; `dist` is a compiled server dependency, not a static site or function entrypoint. Configure `DATABASE_URL` and the other production variables in the Vercel Environment Variables settings.
+
 ## Dynamic account model and admin API
 
 Each user registers one wallet with a provider. The server generates a unique MSISDN from the configured provider prefixes; the frontend cannot choose the MSISDN or initial balance.
