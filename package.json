@@ -14,9 +14,6 @@
     "typecheck": "tsc --noEmit -p .",
     "test": "npm run build && node --test"
   },
-  "engines": {
-    "node": ">=20"
-  },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
     "@fastify/formbody": "^8.0.2",
@@ -30,5 +27,8 @@
     "@types/pg": "^8.11.6",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }
