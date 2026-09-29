@@ -1,10 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
-import { MockError } from "../shared/errors";
-import { mvolaByServerCorrelationId } from "../providers/mvola/mvola.store";
-import { orangeByPayToken } from "../providers/orange-money/orange.store";
-import { confirmPayment } from "../providers/orange-money/orange.service";
-import { getConfig, resetEverything, resetOne, updateConfig } from "./mock.service";
-import { getProfile, listProfiles } from "./profiles";
+import { MockError } from "../shared/errors.js";
+import { mvolaByServerCorrelationId } from "../providers/mvola/mvola.store.js";
+import { orangeByPayToken } from "../providers/orange-money/orange.store.js";
+import { confirmPayment } from "../providers/orange-money/orange.service.js";
+import { getConfig, resetEverything, resetOne, updateConfig } from "./mock.service.js";
+import { getProfile, listProfiles } from "./profiles.js";
 
 const esc = (s: unknown): string =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);

@@ -1,4 +1,4 @@
-import type { OrangeTransaction } from "./orange.types";
+import type { OrangeTransaction } from "./orange.types.js";
 
 /** All state is in memory and lost on restart. */
 export const orangeTokens = new Map<string, number>(); // access_token -> expiry (epoch ms)

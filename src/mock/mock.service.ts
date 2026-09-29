@@ -1,7 +1,7 @@
-import { MockError } from "../shared/errors";
-import { clearMvolaTransactions } from "../providers/mvola/mvola.store";
-import { clearOrangeTransactions } from "../providers/orange-money/orange.store";
-import { getProfile, resetAllProfiles, resetProfile } from "./profiles";
+import { MockError } from "../shared/errors.js";
+import { clearMvolaTransactions } from "../providers/mvola/mvola.store.js";
+import { clearOrangeTransactions } from "../providers/orange-money/orange.store.js";
+import { getProfile, resetAllProfiles, resetProfile } from "./profiles.js";
 
 export const SCENARIOS = ["success", "insufficient_balance", "provider_error", "timeout", "always_pending"] as const;
 export type Scenario = (typeof SCENARIOS)[number];

@@ -1,12 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
-import { ProviderHttpError } from "../../shared/errors";
+import { ProviderHttpError } from "../../shared/errors.js";
 import {
   SUPPORTED_COUNTRY_SEGMENTS,
   createWebPayment,
   getTransactionStatus,
   handleTokenRequest,
-} from "./orange.service";
-import { orangeError } from "./orange.types";
+} from "./orange.service.js";
+import { orangeError } from "./orange.types.js";
 
 const assertCountry = (c: string): void => {
   if (!SUPPORTED_COUNTRY_SEGMENTS.includes(c)) throw orangeError(404, 404, "Not Found", `Unknown path segment ${c}`);

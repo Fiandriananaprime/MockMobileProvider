@@ -1,4 +1,4 @@
-import type { MvolaTransaction } from "./mvola.types";
+import type { MvolaTransaction } from "./mvola.types.js";
 
 /** All state is in memory and lost on restart. */
 export const mvolaTokens = new Map<string, number>(); // token -> expiry (epoch ms)

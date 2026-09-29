@@ -1,13 +1,13 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import { ProviderHttpError } from "../../shared/errors";
+import { ProviderHttpError } from "../../shared/errors.js";
 import {
   SUPPORTED_PATH_VERSIONS,
   getTransactionDetails,
   getTransactionStatus,
   handleTokenRequest,
   initiatePayment,
-} from "./mvola.service";
-import { mvolaError } from "./mvola.types";
+} from "./mvola.service.js";
+import { mvolaError } from "./mvola.types.js";
 
 const BASE = "/mvola/mm/transactions/type/merchantpay";
 

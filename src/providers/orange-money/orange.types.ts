@@ -1,4 +1,4 @@
-import { ProviderHttpError } from "../../shared/errors";
+import { ProviderHttpError } from "../../shared/errors.js";
 
 /** OFFICIAL (Orange Money WebPay): status values. */
 export type OrangeStatus = "INITIATED" | "PENDING" | "EXPIRED" | "SUCCESS" | "FAILED";

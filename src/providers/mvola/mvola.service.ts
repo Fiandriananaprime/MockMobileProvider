@@ -1,15 +1,15 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { ProviderHttpError } from "../../shared/errors";
-import { numericReference, randomHex, uuid } from "../../shared/ids";
-import { getConfig, paymentSucceeds } from "../../mock/mock.service";
-import { debitProfile, findProfileByMsisdn } from "../../mock/profiles";
+import { ProviderHttpError } from "../../shared/errors.js";
+import { numericReference, randomHex, uuid } from "../../shared/ids.js";
+import { getConfig, paymentSucceeds } from "../../mock/mock.service.js";
+import { debitProfile, findProfileByMsisdn } from "../../mock/profiles.js";
 import {
   mvolaByPartnerReference,
   mvolaByServerCorrelationId,
   mvolaByTransactionReference,
   mvolaByXCorrelationId,
   mvolaTokens,
-} from "./mvola.store";
+} from "./mvola.store.js";
 import {
   KeyValue,
   MvolaInitiateRequest,
@@ -17,7 +17,7 @@ import {
   MvolaTransaction,
   mvolaError,
   mvolaInvalidCredentials,
-} from "./mvola.types";
+} from "./mvola.types.js";
 
 export const TOKEN_TTL_SECONDS = 3600;
 export const SUPPORTED_PATH_VERSIONS = ["1.0.0", "1.0"]; // the PDF shows both spellings

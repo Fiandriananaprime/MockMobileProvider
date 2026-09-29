@@ -1,16 +1,16 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { MockError, ProviderHttpError } from "../../shared/errors";
-import { orangeTxnId, randomHex } from "../../shared/ids";
-import { getConfig, paymentSucceeds } from "../../mock/mock.service";
-import { debitProfile, getProfile } from "../../mock/profiles";
-import { orangeByNotifToken, orangeByPayToken, orangePayTokenByOrderId, orangeTokens } from "./orange.store";
+import { MockError, ProviderHttpError } from "../../shared/errors.js";
+import { orangeTxnId, randomHex } from "../../shared/ids.js";
+import { getConfig, paymentSucceeds } from "../../mock/mock.service.js";
+import { debitProfile, getProfile } from "../../mock/profiles.js";
+import { orangeByNotifToken, orangeByPayToken, orangePayTokenByOrderId, orangeTokens } from "./orange.store.js";
 import {
   OrangeTransaction,
   OrangeWebPaymentRequest,
   orangeError,
   orangeInvalidToken,
   orangeMissingField,
-} from "./orange.types";
+} from "./orange.types.js";
 
 /** Path segment after /orange-money-webpay/: "dev" (sandbox, documented). "mg" = ASSUMPTION for Madagascar production. */
 export const SUPPORTED_COUNTRY_SEGMENTS = ["dev", "mg"];

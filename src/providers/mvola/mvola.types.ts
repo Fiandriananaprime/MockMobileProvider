@@ -1,4 +1,4 @@
-import { ProviderHttpError } from "../../shared/errors";
+import { ProviderHttpError } from "../../shared/errors.js";
 
 export type KeyValue = { key: string; value: string };
 

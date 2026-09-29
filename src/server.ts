@@ -1,8 +1,8 @@
 import Fastify from "fastify";
 import formbody from "@fastify/formbody";
-import { mvolaRoutes } from "./providers/mvola/mvola.routes";
-import { orangeRoutes } from "./providers/orange-money/orange.routes";
-import { mockRoutes } from "./mock/mock.routes";
+import { mvolaRoutes } from "./providers/mvola/mvola.routes.js";
+import { orangeRoutes } from "./providers/orange-money/orange.routes.js";
+import { mockRoutes } from "./mock/mock.routes.js";
 
 export async function buildServer() {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
