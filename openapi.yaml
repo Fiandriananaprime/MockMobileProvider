@@ -1,0 +1,1128 @@
+openapi: 3.0.3
+info:
+  title: mock-mobile-money-service
+  version: 1.0.0
+  description: |
+    Faux fournisseur **MVola** et **Orange Money** pour le développement local du Payment Service NovaMarket.
+    Tout l'état est en mémoire et perdu au redémarrage.
+
+    Légende des tags :
+    - **MVola** / **Orange Money** : contrat reproduit depuis la documentation / les SDK publics (voir README pour les
+      éléments marqués ASSUMPTION : non vérifiables publiquement).
+    - **Mock** : endpoints MOCK-ONLY sous `/__mock`, absents des vrais fournisseurs.
+servers:
+  - url: http://localhost:4010
+    description: Mock local (MVOLA_BASE_URL et ORANGE_MONEY_BASE_URL pointent ici)
+
+tags:
+  - name: MVola
+    description: Merchant Pay v1 (sandbox réel https://devapi.mvola.mg, prod https://api.mvola.mg)
+  - name: Orange Money
+    description: WebPay (https://api.orange.com)
+  - name: Mock
+    description: MOCK-ONLY – jamais présent chez les vrais fournisseurs
+
+paths:
+  # ------------------------------------------------------------------ MVola
+  /token:
+    post:
+      tags: [MVola]
+      operationId: mvolaToken
+      summary: Obtenir un access token MVola
+      description: Toute paire key:secret non vide est acceptée par le mock.
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials]
+                scope:
+                  type: string
+                  example: EXT_INT_MVOLA_SCOPE
+            example:
+              grant_type: client_credentials
+              scope: EXT_INT_MVOLA_SCOPE
+      responses:
+        "200":
+          description: Token généré
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MvolaToken" }
+              example:
+                access_token: e25c5488c36b0c18a38893215d0d2f9a9aec4fdf2cbec7e4
+                scope: EXT_INT_MVOLA_SCOPE
+                token_type: Bearer
+                expires_in: 3600
+        "400":
+          description: grant_type invalide
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthError" }
+              example:
+                error: unsupported_grant_type
+                error_description: grant_type must be client_credentials
+        "401":
+          description: Credentials Basic manquants
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthError" }
+              example:
+                error: invalid_client
+                error_description: "Client authentication failed (send Authorization: Basic base64(key:secret))"
+
+  /mvola/mm/transactions/type/merchantpay/{version}/:
+    post:
+      tags: [MVola]
+      operationId: mvolaInitiate
+      summary: Initier un paiement (Merchant Pay)
+      description: |
+        Retourne `pending`. Le résultat final s'obtient par polling (status) ou par callback si `X-Callback-URL`
+        est envoyé (le mock fait alors un `PUT` vers cette URL).
+
+        Le profil fictif est déterminé par `debitParty.msisdn` (le `fakeMsisdn` du profil, ex. `03435000005`
+        pour MVOLA_5). Un MSISDN inconnu conduit à une transaction `failed`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Version"
+        - $ref: "#/components/parameters/HVersion"
+        - $ref: "#/components/parameters/XCorrelationID"
+        - $ref: "#/components/parameters/UserLanguage"
+        - $ref: "#/components/parameters/UserAccountIdentifier"
+        - $ref: "#/components/parameters/PartnerName"
+        - $ref: "#/components/parameters/CacheControl"
+        - name: X-Callback-URL
+          in: header
+          required: false
+          description: Si présent, notificationMethod = callback.
+          schema: { type: string, format: uri }
+          example: http://localhost:3000/mvola/callback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MvolaInitiateRequest" }
+            examples:
+              paiement500:
+                summary: 500 Ar depuis le profil MVOLA_5
+                value:
+                  amount: "500"
+                  currency: Ar
+                  descriptionText: NovaMarket order 42
+                  requestingOrganisationTransactionReference: order-42-a1
+                  originalTransactionReference: order-42-a1
+                  requestDate: "2026-09-29T10:00:00.000Z"
+                  debitParty:
+                    - { key: msisdn, value: "03435000005" }
+                  creditParty:
+                    - { key: msisdn, value: "0343500001" }
+                  metadata:
+                    - { key: partnerName, value: NovaMarket }
+                    - { key: fc, value: USD }
+                    - { key: amountFc, value: "1" }
+              soldeInsuffisant:
+                summary: 5000 Ar depuis MVOLA_1 (solde 1000) -> finira en failed
+                value:
+                  amount: "5000"
+                  currency: Ar
+                  descriptionText: Test solde insuffisant
+                  requestingOrganisationTransactionReference: order-43-a1
+                  requestDate: "2026-09-29T10:00:00.000Z"
+                  debitParty:
+                    - { key: msisdn, value: "03435000001" }
+                  creditParty:
+                    - { key: msisdn, value: "0343500001" }
+      responses:
+        "202":
+          description: Paiement accepté (HTTP 202 = ASSUMPTION, tout 2xx est valide côté client)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MvolaInitiateResponse" }
+              examples:
+                polling:
+                  value:
+                    status: pending
+                    serverCorrelationId: 6747819c-bcae-4c0c-ba82-1b6c854ade1d
+                    notificationMethod: polling
+                callback:
+                  value:
+                    status: pending
+                    serverCorrelationId: 6747819c-bcae-4c0c-ba82-1b6c854ade1d
+                    notificationMethod: callback
+        "400":
+          $ref: "#/components/responses/MvolaValidationError"
+        "401":
+          $ref: "#/components/responses/MvolaInvalidCredentials"
+        "409":
+          description: requestingOrganisationTransactionReference déjà utilisé (ASSUMPTION)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MvolaError" }
+              example:
+                errorCategory: businessRule
+                errorCode: duplicateRequest
+                errorDescription: requestingOrganisationTransactionReference already used
+                errorDateTime: "2026-09-29T11:48:48.982Z"
+                errorParameters:
+                  - { key: requestingOrganisationTransactionReference, value: order-42-a1 }
+        "503":
+          description: Scénario mock `provider_error`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MvolaError" }
+              example:
+                errorCategory: internal
+                errorCode: genericError
+                errorDescription: "The service is not currently available (mock scenario: provider_error)"
+                errorDateTime: "2026-09-29T11:48:50.167Z"
+                errorParameters: []
+        "504":
+          description: Scénario mock `timeout`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MvolaError" }
+              example:
+                errorCategory: internal
+                errorCode: genericError
+                errorDescription: "Gateway timeout (mock scenario: timeout)"
+                errorDateTime: "2026-09-29T11:50:00.000Z"
+                errorParameters: []
+      callbacks:
+        mvolaCallback:
+          "{$request.header.X-Callback-URL}":
+            put:
+              summary: Callback envoyé par le mock à la fin du paiement
+              requestBody:
+                content:
+                  application/json:
+                    schema: { $ref: "#/components/schemas/MvolaCallback" }
+                    examples:
+                      completed:
+                        value:
+                          transactionStatus: completed
+                          serverCorrelationId: 6747819c-bcae-4c0c-ba82-1b6c854ade1d
+                          transactionReference: "899944982"
+                          requestDate: "2026-09-29T10:00:00.000Z"
+                          debitParty: [{ key: msisdn, value: "03435000005" }]
+                          creditParty: [{ key: msisdn, value: "0343500001" }]
+                          fees: [{ feeAmount: "0" }]
+                          metadata: [{ key: partnerName, value: NovaMarket }]
+                      failed:
+                        value:
+                          transactionStatus: failed
+                          serverCorrelationId: 10216284-c287-47ee-85df-231e252d8ec9
+                          transactionReference: "559590389"
+                          requestDate: "2026-09-29T10:00:00.000Z"
+                          debitParty: [{ key: msisdn, value: "03435000001" }]
+                          creditParty: [{ key: msisdn, value: "0343500001" }]
+                          metadata: []
+              responses:
+                "200":
+                  description: Réponse ignorée par le mock
+
+  /mvola/mm/transactions/type/merchantpay/{version}/status/{serverCorrelationId}:
+    get:
+      tags: [MVola]
+      operationId: mvolaStatus
+      summary: Statut d'une transaction (polling)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Version"
+        - name: serverCorrelationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          example: 6747819c-bcae-4c0c-ba82-1b6c854ade1d
+        - $ref: "#/components/parameters/HVersion"
+        - $ref: "#/components/parameters/XCorrelationID"
+        - $ref: "#/components/parameters/UserLanguage"
+        - $ref: "#/components/parameters/UserAccountIdentifier"
+        - $ref: "#/components/parameters/PartnerName"
+        - $ref: "#/components/parameters/CacheControl"
+      responses:
+        "200":
+          description: Statut courant. `objectReference` est vide tant que la transaction n'est pas réglée.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MvolaStatusResponse" }
+              examples:
+                pending:
+                  value:
+                    status: pending
+                    serverCorrelationId: 6747819c-bcae-4c0c-ba82-1b6c854ade1d
+                    notificationMethod: polling
+                    objectReference: ""
+                completed:
+                  value:
+                    status: completed
+                    serverCorrelationId: 6747819c-bcae-4c0c-ba82-1b6c854ade1d
+                    notificationMethod: polling
+                    objectReference: "899944982"
+                failed:
+                  value:
+                    status: failed
+                    serverCorrelationId: 10216284-c287-47ee-85df-231e252d8ec9
+                    notificationMethod: polling
+                    objectReference: "559590389"
+        "400":
+          $ref: "#/components/responses/MvolaValidationError"
+        "401":
+          $ref: "#/components/responses/MvolaInvalidCredentials"
+        "404":
+          $ref: "#/components/responses/MvolaNotFound"
+
+  /mvola/mm/transactions/type/merchantpay/{version}/{transId}:
+    get:
+      tags: [MVola]
+      operationId: mvolaDetails
+      summary: Détails d'une transaction
+      description: "`transId` = `objectReference` retourné par l'appel status."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Version"
+        - name: transId
+          in: path
+          required: true
+          schema: { type: string }
+          example: "899944982"
+        - $ref: "#/components/parameters/HVersion"
+        - $ref: "#/components/parameters/XCorrelationID"
+        - $ref: "#/components/parameters/UserLanguage"
+        - $ref: "#/components/parameters/UserAccountIdentifier"
+        - $ref: "#/components/parameters/PartnerName"
+        - $ref: "#/components/parameters/CacheControl"
+      responses:
+        "200":
+          description: Détails
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MvolaDetails" }
+              examples:
+                completed:
+                  value:
+                    amount: "500"
+                    currency: Ar
+                    transactionReference: "899944982"
+                    transactionStatus: completed
+                    createDate: "2026-09-29T11:48:46.800Z"
+                    debitParty: [{ key: msisdn, value: "03435000005" }]
+                    creditParty: [{ key: msisdn, value: "0343500001" }]
+                    metadata:
+                      - { key: originalTransactionResult, value: "0" }
+                      - { key: originalTransactionResultDesc, value: Completed }
+                    fees: [{ feeAmount: "0" }]
+                failed:
+                  value:
+                    amount: "5000"
+                    currency: Ar
+                    transactionReference: "559590389"
+                    transactionStatus: failed
+                    createDate: "2026-09-29T11:48:48.100Z"
+                    debitParty: [{ key: msisdn, value: "03435000001" }]
+                    creditParty: [{ key: msisdn, value: "0343500001" }]
+                    metadata:
+                      - { key: originalTransactionResult, value: "1001" }
+                      - { key: originalTransactionResultDesc, value: Insufficient funds }
+                    fees: [{ feeAmount: "0" }]
+        "400":
+          $ref: "#/components/responses/MvolaValidationError"
+        "401":
+          $ref: "#/components/responses/MvolaInvalidCredentials"
+        "404":
+          $ref: "#/components/responses/MvolaNotFound"
+
+  # ----------------------------------------------------------- Orange Money
+  /oauth/v3/token:
+    post:
+      tags: [Orange Money]
+      operationId: orangeToken
+      summary: Obtenir un access token Orange
+      description: Toute valeur `Basic` non vide est acceptée par le mock.
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials]
+            example:
+              grant_type: client_credentials
+      responses:
+        "200":
+          description: Token généré
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrangeToken" }
+              example:
+                token_type: Bearer
+                access_token: f4d30a0c9362c36dab417c2b2f894c935928e079a48251d4
+                expires_in: "7776000"
+        "401":
+          description: Authorization Basic manquant (ASSUMPTION)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthError" }
+              example:
+                error: invalid_client
+                error_description: The requested client is not authorized (mock convention)
+
+  /orange-money-webpay/{country}/v1/webpayment:
+    post:
+      tags: [Orange Money]
+      operationId: orangeWebPayment
+      summary: Initier un paiement WebPay
+      description: |
+        Retourne un `pay_token` et une `payment_url`. Ici `payment_url` pointe vers la page mock
+        `/__mock/orange/pay/{pay_token}`. Le client (simulé) y choisit un profil ORANGE_MONEY_n.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Country"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrangeWebPaymentRequest" }
+            example:
+              merchant_key: myMerchantKey
+              currency: MGA
+              order_id: ORD-42
+              amount: 2500
+              return_url: http://localhost:3000/return
+              cancel_url: http://localhost:3000/cancel
+              notif_url: http://localhost:3000/notif
+              lang: fr
+              reference: NovaMarket order 42
+      responses:
+        "201":
+          description: Paiement initié (statut INITIATED)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrangeWebPaymentResponse" }
+              example:
+                status: 201
+                message: OK
+                pay_token: 34370449153816847b025111f7d88d5af349552043051577486d1962d6eceaf3
+                payment_url: http://localhost:4010/__mock/orange/pay/34370449153816847b025111f7d88d5af349552043051577486d1962d6eceaf3
+                notif_token: e37cec8bde0d09c55f54122423024f22
+        "400":
+          description: Champ obligatoire manquant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrangeError" }
+              example:
+                code: 23
+                message: Missing body field
+                description: "Key: 'WebPaymentInfo.merchant_key' Error:Field validation for 'merchant_key' failed on the 'required' tag"
+        "401":
+          $ref: "#/components/responses/OrangeInvalidToken"
+        "500":
+          description: Scénario mock `provider_error`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrangeError" }
+              example:
+                code: 500
+                message: Internal Server Error
+                description: "Mock scenario: provider_error"
+        "504":
+          description: Scénario mock `timeout`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrangeError" }
+              example:
+                code: 504
+                message: Gateway Timeout
+                description: "Mock scenario: timeout"
+      callbacks:
+        orangeNotification:
+          "{$request.body#/notif_url}":
+            post:
+              summary: Notification envoyée par le mock à la fin du paiement
+              requestBody:
+                content:
+                  application/json:
+                    schema: { $ref: "#/components/schemas/OrangeNotification" }
+                    examples:
+                      success:
+                        value:
+                          status: SUCCESS
+                          notif_token: e37cec8bde0d09c55f54122423024f22
+                          txnid: MP260929.1148.D333D
+                      failed:
+                        value:
+                          status: FAILED
+                          notif_token: e37cec8bde0d09c55f54122423024f22
+              responses:
+                "200":
+                  description: Réponse ignorée par le mock
+
+  /orange-money-webpay/{country}/v1/transactionstatus:
+    post:
+      tags: [Orange Money]
+      operationId: orangeTransactionStatus
+      summary: Statut d'une transaction WebPay
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Country"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrangeStatusRequest" }
+            example:
+              order_id: ORD-42
+              amount: 2500
+              pay_token: 34370449153816847b025111f7d88d5af349552043051577486d1962d6eceaf3
+      responses:
+        "200":
+          description: Statut. `txnid` seulement en cas de SUCCESS. Un INITIATED non confirmé passe à EXPIRED après 10 min.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrangeStatusResponse" }
+              examples:
+                initiated:
+                  value: { status: INITIATED, order_id: ORD-42 }
+                pending:
+                  value: { status: PENDING, order_id: ORD-42 }
+                success:
+                  value: { status: SUCCESS, order_id: ORD-42, txnid: MP260929.1148.D333D }
+                failed:
+                  value: { status: FAILED, order_id: ORD-42 }
+                expired:
+                  value: { status: EXPIRED, order_id: ORD-42 }
+        "400":
+          description: Champ manquant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrangeError" }
+              example:
+                code: 23
+                message: Missing body field
+                description: "Key: 'GetTransactionStatusInfo.OrderId' Error:Field validation for 'OrderId' failed on the 'required' tag"
+        "401":
+          $ref: "#/components/responses/OrangeInvalidToken"
+        "404":
+          description: order_id / amount / pay_token inconnus ou incohérents (ASSUMPTION)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrangeError" }
+              example:
+                code: 60
+                message: Transaction not found
+                description: No transaction matches order_id, amount and pay_token (mock convention)
+
+  # ------------------------------------------------------------------- Mock
+  /__mock/profiles:
+    get:
+      tags: [Mock]
+      operationId: mockListProfiles
+      summary: Lister les 10 profils
+      responses:
+        "200":
+          description: Les 10 profils avec leur solde courant
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/FakePhoneProfile" }
+              example:
+                - { type: MVOLA_1, provider: MVOLA, fakeMsisdn: "03435000001", initialBalance: 1000, balance: 1000 }
+                - { type: MVOLA_5, provider: MVOLA, fakeMsisdn: "03435000005", initialBalance: 1000000, balance: 999500 }
+                - { type: ORANGE_MONEY_2, provider: ORANGE_MONEY, fakeMsisdn: "03200000002", initialBalance: 5000, balance: 2500 }
+
+  /__mock/profiles/{profile}:
+    get:
+      tags: [Mock]
+      operationId: mockGetProfile
+      summary: Détail d'un profil
+      parameters:
+        - $ref: "#/components/parameters/ProfileParam"
+      responses:
+        "200":
+          description: Profil
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FakePhoneProfile" }
+              example: { type: MVOLA_5, provider: MVOLA, fakeMsisdn: "03435000005", initialBalance: 1000000, balance: 999500 }
+        "404":
+          $ref: "#/components/responses/MockNotFound"
+
+  /__mock/profiles/{profile}/reset:
+    post:
+      tags: [Mock]
+      operationId: mockResetProfile
+      summary: Remettre le solde d'un profil à initialBalance
+      description: Ne pas envoyer de Content-Type (pas de body).
+      parameters:
+        - $ref: "#/components/parameters/ProfileParam"
+      responses:
+        "200":
+          description: Profil réinitialisé
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FakePhoneProfile" }
+              example: { type: MVOLA_5, provider: MVOLA, fakeMsisdn: "03435000005", initialBalance: 1000000, balance: 1000000 }
+        "404":
+          $ref: "#/components/responses/MockNotFound"
+
+  /__mock/reset:
+    post:
+      tags: [Mock]
+      operationId: mockResetAll
+      summary: Réinitialiser les 10 profils
+      parameters:
+        - name: transactions
+          in: query
+          description: Vide aussi les transactions en mémoire
+          schema: { type: boolean, default: false }
+        - name: config
+          in: query
+          description: Restaure aussi la configuration par défaut
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Les 10 profils réinitialisés
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/FakePhoneProfile" }
+              example:
+                - { type: MVOLA_1, provider: MVOLA, fakeMsisdn: "03435000001", initialBalance: 1000, balance: 1000 }
+                - { type: ORANGE_MONEY_5, provider: ORANGE_MONEY, fakeMsisdn: "03200000005", initialBalance: 1000000, balance: 1000000 }
+
+  /__mock/config:
+    get:
+      tags: [Mock]
+      operationId: mockGetConfig
+      summary: Lire la configuration
+      responses:
+        "200":
+          description: Configuration courante
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockConfig" }
+              example: { scenario: success, settleDelayMs: 2000, timeoutMs: 30000, orangeAutoProfile: null }
+    post:
+      tags: [Mock]
+      operationId: mockUpdateConfig
+      summary: Modifier la configuration (champs partiels)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MockConfigUpdate" }
+            examples:
+              insuffisant:
+                value: { scenario: insufficient_balance }
+              pending:
+                value: { scenario: always_pending }
+              rapideAutoOrange:
+                summary: Règlement rapide + Orange auto-confirmé avec ORANGE_MONEY_5
+                value: { scenario: success, settleDelayMs: 500, orangeAutoProfile: ORANGE_MONEY_5 }
+      responses:
+        "200":
+          description: Configuration mise à jour
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockConfig" }
+              example: { scenario: success, settleDelayMs: 500, timeoutMs: 30000, orangeAutoProfile: ORANGE_MONEY_5 }
+        "400":
+          description: Valeur invalide
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockError" }
+              example:
+                error: MOCK_ERROR
+                message: "scenario must be one of success, insufficient_balance, provider_error, timeout, always_pending"
+
+  /__mock/transactions:
+    get:
+      tags: [Mock]
+      operationId: mockListTransactions
+      summary: Inspecter les transactions en mémoire
+      responses:
+        "200":
+          description: Transactions des deux fournisseurs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mvola:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        serverCorrelationId: { type: string, format: uuid }
+                        transactionReference: { type: string, nullable: true }
+                        status: { $ref: "#/components/schemas/MvolaStatus" }
+                        amount: { type: number }
+                        debitMsisdn: { type: string }
+                        profile: { type: string, nullable: true }
+                  orangeMoney:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        order_id: { type: string }
+                        pay_token: { type: string }
+                        status: { $ref: "#/components/schemas/OrangeStatus" }
+                        amount: { type: number }
+                        txnid: { type: string, nullable: true }
+                        profile: { type: string, nullable: true }
+              example:
+                mvola:
+                  - serverCorrelationId: 6747819c-bcae-4c0c-ba82-1b6c854ade1d
+                    transactionReference: "899944982"
+                    status: completed
+                    amount: 500
+                    debitMsisdn: "03435000005"
+                    profile: MVOLA_5
+                orangeMoney:
+                  - order_id: ORD-42
+                    pay_token: 34370449153816847b025111f7d88d5af349552043051577486d1962d6eceaf3
+                    status: SUCCESS
+                    amount: 2500
+                    txnid: MP260929.1148.D333D
+                    profile: ORANGE_MONEY_2
+
+  /__mock/orange/pay/{payToken}:
+    get:
+      tags: [Mock]
+      operationId: mockOrangeHostedPage
+      summary: Page de paiement Orange simulée (HTML)
+      description: Remplace la page hébergée réelle d'Orange. Affiche les 5 profils ORANGE_MONEY_n.
+      parameters:
+        - $ref: "#/components/parameters/PayToken"
+      responses:
+        "200":
+          description: Page HTML
+          content:
+            text/html:
+              schema: { type: string }
+        "404":
+          $ref: "#/components/responses/MockNotFound"
+
+  /__mock/orange/pay/{payToken}/confirm:
+    post:
+      tags: [Mock]
+      operationId: mockOrangeConfirm
+      summary: Simuler le client qui confirme le paiement avec un profil
+      description: |
+        Passe la transaction de INITIATED à PENDING puis la règle après `settleDelayMs`.
+        Depuis le formulaire HTML (form-urlencoded) : redirection 303 vers `return_url`.
+      parameters:
+        - $ref: "#/components/parameters/PayToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile:
+                  type: string
+                  pattern: "^ORANGE_MONEY_[1-5]$"
+            example:
+              profile: ORANGE_MONEY_5
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile: { type: string }
+      responses:
+        "200":
+          description: Transaction passée à PENDING
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { $ref: "#/components/schemas/OrangeStatus" }
+                  order_id: { type: string }
+                  profile: { type: string }
+              example: { status: PENDING, order_id: ORD-42, profile: ORANGE_MONEY_5 }
+        "303":
+          description: Redirection vers return_url (soumission du formulaire HTML)
+        "400":
+          description: Profil qui n'est pas un ORANGE_MONEY_n
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockError" }
+              example: { error: MOCK_ERROR, message: MVOLA_1 is not an ORANGE_MONEY profile }
+        "404":
+          $ref: "#/components/responses/MockNotFound"
+        "409":
+          description: Transaction déjà confirmée / expirée
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockError" }
+              example: { error: MOCK_ERROR, message: "Transaction is SUCCESS, cannot confirm" }
+
+# ====================================================================
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: consumerKey:consumerSecret (MVola) ou header d'autorisation de l'app Orange. Le mock accepte toute valeur non vide.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token obtenu via /token (MVola) ou /oauth/v3/token (Orange). Chaque fournisseur a ses propres tokens.
+
+  parameters:
+    Version:
+      name: version
+      in: path
+      required: true
+      schema: { type: string, enum: ["1.0.0", "1.0"], default: "1.0.0" }
+    HVersion:
+      name: Version
+      in: header
+      required: true
+      schema: { type: string, enum: ["1", "1.0", "1.0.0"] }
+      example: "1.0"
+    XCorrelationID:
+      name: X-CorrelationID
+      in: header
+      required: true
+      description: UUID unique par requête, 40 caractères max.
+      schema: { type: string, format: uuid }
+      example: 123e4567-e89b-12d3-a456-426614174000
+    UserLanguage:
+      name: UserLanguage
+      in: header
+      required: true
+      schema: { type: string, enum: [FR, MG] }
+      example: FR
+    UserAccountIdentifier:
+      name: UserAccountIdentifier
+      in: header
+      required: true
+      description: "Format `msisdn;<numéro marchand>`"
+      schema: { type: string, pattern: "^msisdn;\\S+$" }
+      example: "msisdn;0343500001"
+    PartnerName:
+      name: partnerName
+      in: header
+      required: true
+      schema: { type: string, maxLength: 50 }
+      example: NovaMarket
+    CacheControl:
+      name: Cache-Control
+      in: header
+      required: false
+      schema: { type: string }
+      example: no-cache
+    Country:
+      name: country
+      in: path
+      required: true
+      description: "`dev` = sandbox (documenté). `mg` = production Madagascar (ASSUMPTION)."
+      schema: { type: string, enum: [dev, mg] }
+      example: mg
+    ProfileParam:
+      name: profile
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [MVOLA_1, MVOLA_2, MVOLA_3, MVOLA_4, MVOLA_5, ORANGE_MONEY_1, ORANGE_MONEY_2, ORANGE_MONEY_3, ORANGE_MONEY_4, ORANGE_MONEY_5]
+      example: MVOLA_5
+    PayToken:
+      name: payToken
+      in: path
+      required: true
+      schema: { type: string }
+      example: 34370449153816847b025111f7d88d5af349552043051577486d1962d6eceaf3
+
+  responses:
+    MvolaInvalidCredentials:
+      description: Token absent, invalide ou expiré (format OFFICIEL de la doc MVola)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MvolaFault" }
+          example:
+            fault:
+              code: 900901
+              message: Invalid Credentials
+              description: Invalid Credentials. Make sure you have given the correct access token
+    MvolaValidationError:
+      description: En-tête ou champ invalide/manquant (casse camelCase = ASSUMPTION)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MvolaError" }
+          examples:
+            enteteManquant:
+              value:
+                errorCategory: validation
+                errorCode: formatError
+                errorDescription: "Missing required header: Version"
+                errorDateTime: "2026-09-29T11:48:48.999Z"
+                errorParameters: [{ key: Version, value: required }]
+            champInvalide:
+              value:
+                errorCategory: validation
+                errorCode: formatError
+                errorDescription: "Invalid JSON Field: amount must be a positive numeric string"
+                errorDateTime: "2026-09-29T11:49:10.120Z"
+                errorParameters: [{ key: amount, value: must be a positive numeric string }]
+    MvolaNotFound:
+      description: Identifiant inconnu
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MvolaError" }
+          example:
+            errorCategory: validation
+            errorCode: notFound
+            errorDescription: Unknown serverCorrelationId
+            errorDateTime: "2026-09-29T11:51:00.000Z"
+            errorParameters: [{ key: serverCorrelationId, value: 00000000-0000-0000-0000-000000000000 }]
+    OrangeInvalidToken:
+      description: Token invalide ou expiré (code 41 = ASSUMPTION)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OrangeError" }
+          example:
+            code: 41
+            message: Invalid token
+            description: Invalid or expired access token (mock convention)
+    MockNotFound:
+      description: Profil ou pay_token inconnu
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MockError" }
+          example: { error: MOCK_ERROR, message: Unknown profile }
+
+  schemas:
+    # ---- MVola
+    KeyValue:
+      type: object
+      required: [key, value]
+      properties:
+        key: { type: string }
+        value: { type: string }
+    MvolaToken:
+      type: object
+      properties:
+        access_token: { type: string }
+        scope: { type: string }
+        token_type: { type: string, enum: [Bearer] }
+        expires_in: { type: integer, example: 3600 }
+    MvolaInitiateRequest:
+      type: object
+      required: [amount, currency, descriptionText, requestingOrganisationTransactionReference, requestDate, debitParty, creditParty]
+      properties:
+        amount: { type: string, pattern: "^\\d+(\\.\\d+)?$", description: Chaîne numérique > 0 }
+        currency: { type: string, enum: [Ar] }
+        descriptionText: { type: string }
+        requestingOrganisationTransactionReference: { type: string, maxLength: 50, description: "Unique (doublon = 409, ASSUMPTION)" }
+        originalTransactionReference: { type: string, maxLength: 50 }
+        requestDate: { type: string, format: date-time }
+        debitParty:
+          type: array
+          description: Client. Pour le mock, msisdn = fakeMsisdn d'un profil MVOLA_n.
+          items: { $ref: "#/components/schemas/KeyValue" }
+        creditParty:
+          type: array
+          description: Marchand
+          items: { $ref: "#/components/schemas/KeyValue" }
+        metadata:
+          type: array
+          description: partnerName, fc (devise étrangère), amountFc
+          items: { $ref: "#/components/schemas/KeyValue" }
+    MvolaStatus:
+      type: string
+      enum: [pending, completed, failed]
+    MvolaInitiateResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [pending] }
+        serverCorrelationId: { type: string, format: uuid }
+        notificationMethod: { type: string, enum: [callback, polling] }
+    MvolaStatusResponse:
+      type: object
+      properties:
+        status: { $ref: "#/components/schemas/MvolaStatus" }
+        serverCorrelationId: { type: string, format: uuid }
+        notificationMethod: { type: string, enum: [callback, polling] }
+        objectReference: { type: string, description: Vide tant que la transaction n'est pas réglée }
+    MvolaDetails:
+      type: object
+      properties:
+        amount: { type: string }
+        currency: { type: string, enum: [Ar] }
+        transactionReference: { type: string }
+        transactionStatus: { $ref: "#/components/schemas/MvolaStatus" }
+        createDate: { type: string, format: date-time }
+        debitParty: { type: array, items: { $ref: "#/components/schemas/KeyValue" } }
+        creditParty: { type: array, items: { $ref: "#/components/schemas/KeyValue" } }
+        metadata:
+          type: array
+          description: originalTransactionResult, originalTransactionResultDesc (codes = ASSUMPTION)
+          items: { $ref: "#/components/schemas/KeyValue" }
+        fees:
+          type: array
+          items:
+            type: object
+            properties:
+              feeAmount: { type: string }
+    MvolaCallback:
+      type: object
+      properties:
+        transactionStatus: { $ref: "#/components/schemas/MvolaStatus" }
+        serverCorrelationId: { type: string, format: uuid }
+        transactionReference: { type: string }
+        requestDate: { type: string }
+        debitParty: { type: array, items: { $ref: "#/components/schemas/KeyValue" } }
+        creditParty: { type: array, items: { $ref: "#/components/schemas/KeyValue" } }
+        fees:
+          type: array
+          description: Présent seulement si completed
+          items:
+            type: object
+            properties:
+              feeAmount: { type: string }
+        metadata: { type: array, items: { $ref: "#/components/schemas/KeyValue" } }
+    MvolaError:
+      type: object
+      description: Format GSMA en camelCase (ASSUMPTION ; la doc MVola liste ErrorCategory… en majuscule initiale)
+      properties:
+        errorCategory: { type: string }
+        errorCode: { type: string }
+        errorDescription: { type: string }
+        errorDateTime: { type: string, format: date-time }
+        errorParameters: { type: array, items: { $ref: "#/components/schemas/KeyValue" } }
+    MvolaFault:
+      type: object
+      properties:
+        fault:
+          type: object
+          properties:
+            code: { type: integer, example: 900901 }
+            message: { type: string }
+            description: { type: string }
+    OAuthError:
+      type: object
+      properties:
+        error: { type: string }
+        error_description: { type: string }
+
+    # ---- Orange Money
+    OrangeToken:
+      type: object
+      properties:
+        token_type: { type: string, enum: [Bearer] }
+        access_token: { type: string }
+        expires_in: { type: string, description: "Chaîne, comme dans les SDK Orange" }
+    OrangeStatus:
+      type: string
+      enum: [INITIATED, PENDING, EXPIRED, SUCCESS, FAILED]
+      description: |
+        INITIATED : en attente du client. PENDING : client a confirmé. SUCCESS / FAILED : final.
+        EXPIRED : confirmation trop tardive (pay_token valide 10 min).
+    OrangeWebPaymentRequest:
+      type: object
+      required: [merchant_key, currency, order_id, amount, return_url, cancel_url, notif_url]
+      properties:
+        merchant_key: { type: string }
+        currency: { type: string, description: "OUV en sandbox ; valeur prod Madagascar non confirmée (MGA probable). Non validée par le mock." }
+        order_id: { type: string }
+        amount: { type: number, minimum: 1 }
+        return_url: { type: string, format: uri }
+        cancel_url: { type: string, format: uri }
+        notif_url: { type: string, format: uri }
+        lang: { type: string, example: fr }
+        reference: { type: string }
+    OrangeWebPaymentResponse:
+      type: object
+      properties:
+        status: { type: integer, example: 201 }
+        message: { type: string, example: OK }
+        pay_token: { type: string }
+        payment_url: { type: string, format: uri, description: "MOCK : /__mock/orange/pay/{pay_token}" }
+        notif_token: { type: string }
+    OrangeStatusRequest:
+      type: object
+      required: [order_id, amount, pay_token]
+      properties:
+        order_id: { type: string }
+        amount: { type: number }
+        pay_token: { type: string }
+    OrangeStatusResponse:
+      type: object
+      properties:
+        status: { $ref: "#/components/schemas/OrangeStatus" }
+        order_id: { type: string }
+        txnid: { type: string, description: Seulement si SUCCESS }
+    OrangeNotification:
+      type: object
+      properties:
+        status: { $ref: "#/components/schemas/OrangeStatus" }
+        notif_token: { type: string }
+        txnid: { type: string }
+    OrangeError:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        description: { type: string }
+
+    # ---- Mock
+    FakePhoneProfile:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [MVOLA_1, MVOLA_2, MVOLA_3, MVOLA_4, MVOLA_5, ORANGE_MONEY_1, ORANGE_MONEY_2, ORANGE_MONEY_3, ORANGE_MONEY_4, ORANGE_MONEY_5]
+        provider: { type: string, enum: [MVOLA, ORANGE_MONEY] }
+        fakeMsisdn: { type: string, description: "Numéro fictif, jamais le numéro réel de l'utilisateur" }
+        initialBalance: { type: number, description: Ne change jamais }
+        balance: { type: number, description: "Solde courant, baisse à chaque paiement réussi" }
+    MockConfig:
+      type: object
+      properties:
+        scenario: { $ref: "#/components/schemas/Scenario" }
+        settleDelayMs: { type: integer, minimum: 0, default: 2000 }
+        timeoutMs: { type: integer, minimum: 0, default: 30000 }
+        orangeAutoProfile: { type: string, nullable: true, pattern: "^ORANGE_MONEY_[1-5]$" }
+    MockConfigUpdate:
+      type: object
+      properties:
+        scenario: { $ref: "#/components/schemas/Scenario" }
+        settleDelayMs: { type: integer, minimum: 0 }
+        timeoutMs: { type: integer, minimum: 0 }
+        orangeAutoProfile: { type: string, nullable: true, pattern: "^ORANGE_MONEY_[1-5]$" }
+    Scenario:
+      type: string
+      enum: [success, insufficient_balance, provider_error, timeout, always_pending]
+      description: |
+        success : montant <= solde => succès, sinon échec. insufficient_balance : tout échoue.
+        provider_error : initiation en 5xx. timeout : initiation en 504 après timeoutMs.
+        always_pending : ne se règle jamais.
+    MockError:
+      type: object
+      properties:
+        error: { type: string, example: MOCK_ERROR }
+        message: { type: string }
