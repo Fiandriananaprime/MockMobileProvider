@@ -3,15 +3,28 @@
 A fake **MVola** and **Orange Money** provider for local development and testing of the NovaMarket Payment Service.
 
 - Node.js ≥ 20, TypeScript, Fastify, REST
-- **No database, no auth service, no external calls** — all state is in memory
+- **No database or real provider calls** — all state is in memory; configured callbacks are outbound HTTP requests
 - **All state is lost when the process restarts** (transactions, tokens, balances, config)
+
+> This is a development/test simulator, not a real payment provider. Authentication is simulated and transaction
+> state is volatile; do not use it to authorize, capture, or reconcile real payments.
 
 ```bash
 npm install
-npm run dev        # or: npm start        → http://localhost:4010
+npm run dev                 # local development → http://localhost:4010
+npm run build && npm start  # run the compiled production artifact
 ```
 
-Environment variables: `PORT` (default `4010`), `PUBLIC_BASE_URL` (default `http://localhost:<PORT>`, used to build Orange's `payment_url`), `LOG_LEVEL`.
+Environment variables: `PORT` (default `4010`), `HOST` (default `0.0.0.0`), `PUBLIC_BASE_URL` (default `http://localhost:<PORT>`, used to build Orange's `payment_url`), `LOG_LEVEL`.
+
+Production-like deployment requires `NODE_ENV=production`, a public HTTPS `PUBLIC_BASE_URL` (Vercel's `VERCEL_URL` is
+used as a fallback), a `MOCK_ADMIN_TOKEN` of at least 32 bytes, `MVOLA_CLIENT_KEY`, `MVOLA_CLIENT_SECRET`,
+`ORANGE_BASIC_AUTH` (the full `Basic <base64>` value), and a comma-separated `CALLBACK_ALLOWED_HOSTS` hostname allowlist.
+`/health` is unauthenticated for health probes. Administrative `/__mock`
+routes require `Authorization: Bearer <MOCK_ADMIN_TOKEN>`; the Orange hosted payment and confirmation routes use the
+unguessable `payToken` capability instead. Production callbacks must use HTTPS to an allowlisted hostname; redirects
+are rejected and callback requests time out after 5 seconds. Build in CI with `npm ci`, then run `npm test` and
+`npm start` with production dependencies only.
 
 ---
 
@@ -110,7 +123,7 @@ Sandbox host `https://devapi.mvola.mg`, production `https://api.mvola.mg`.
 - Headers: `Authorization: Basic base64(consumerKey:consumerSecret)`, `Content-Type: application/x-www-form-urlencoded`
 - Body: `grant_type=client_credentials&scope=EXT_INT_MVOLA_SCOPE`
 - Response: `{ "access_token", "scope", "token_type": "Bearer", "expires_in": 3600 }`
-- MOCK: any non-empty key/secret is accepted; tokens are generated locally.
+- MOCK: development accepts any non-empty key/secret; production requires the configured `MVOLA_CLIENT_KEY` and `MVOLA_CLIENT_SECRET`.
 - ASSUMPTION (`mvola.service.ts`): 401/400 error body is a WSO2-style `{error, error_description}`.
 
 ### Common headers on all three resources (OFFICIAL)
@@ -157,7 +170,7 @@ If `X-Callback-URL` was sent, the mock does `PUT <url>` on settlement (after 1 s
 Host `https://api.orange.com`.
 
 ### Auth — `POST /oauth/v3/token`  (OFFICIAL)
-`Authorization: Basic <authorization header from your Orange app>`, body `grant_type=client_credentials` (form). Response `{ "token_type": "Bearer", "access_token": "...", "expires_in": "7776000" }`. MOCK: any non-empty Basic value accepted. ASSUMPTION: 401 error body.
+`Authorization: Basic <authorization header from your Orange app>`, body `grant_type=client_credentials` (form). Response `{ "token_type": "Bearer", "access_token": "...", "expires_in": "7776000" }`. MOCK: development accepts any non-empty Basic value; production requires an exact match to `ORANGE_BASIC_AUTH`. ASSUMPTION: 401 error body.
 
 ### 1. Web payment — `POST /orange-money-webpay/{dev|mg}/v1/webpayment`  (OFFICIAL; HTTP 201)
 Headers: `Authorization: Bearer <token>`, `Content-Type: application/json`, `Accept: application/json`.

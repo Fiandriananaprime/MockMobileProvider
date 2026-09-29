@@ -20,16 +20,34 @@ tags:
   - name: Orange Money
     description: WebPay (https://api.orange.com)
   - name: Mock
-    description: MOCK-ONLY – jamais présent chez les vrais fournisseurs
+    description: |
+      MOCK-ONLY – jamais présent chez les vrais fournisseurs. En production, les routes d'administration `/__mock`
+      exigent `Authorization: Bearer <MOCK_ADMIN_TOKEN>`; la page et la confirmation Orange utilisent le `payToken`.
 
 paths:
+  /health:
+    get:
+      tags: [Mock]
+      operationId: health
+      summary: Vérifier que le service répond
+      responses:
+        "200":
+          description: Service disponible
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+              example: { status: ok }
+
   # ------------------------------------------------------------------ MVola
   /token:
     post:
       tags: [MVola]
       operationId: mvolaToken
       summary: Obtenir un access token MVola
-      description: Toute paire key:secret non vide est acceptée par le mock.
+      description: En développement, toute paire key:secret non vide est acceptée; en production, credentials vérifiés par MVOLA_CLIENT_KEY et MVOLA_CLIENT_SECRET.
       security:
         - basicAuth: []
       requestBody:
@@ -102,7 +120,9 @@ paths:
         - name: X-Callback-URL
           in: header
           required: false
-          description: Si présent, notificationMethod = callback.
+          description: |
+            Si présent, notificationMethod = callback. En production, HTTPS et hostname dans CALLBACK_ALLOWED_HOSTS;
+            les redirections sont refusées et le callback expire après 5 secondes.
           schema: { type: string, format: uri }
           example: http://localhost:3000/mvola/callback
       requestBody:
@@ -347,7 +367,7 @@ paths:
       tags: [Orange Money]
       operationId: orangeToken
       summary: Obtenir un access token Orange
-      description: Toute valeur `Basic` non vide est acceptée par le mock.
+      description: En développement, toute valeur `Basic` non vide est acceptée; en production, valeur comparée à ORANGE_BASIC_AUTH.
       security:
         - basicAuth: []
       requestBody:
@@ -1055,7 +1075,7 @@ components:
         amount: { type: number, minimum: 1 }
         return_url: { type: string, format: uri }
         cancel_url: { type: string, format: uri }
-        notif_url: { type: string, format: uri }
+        notif_url: { type: string, format: uri, description: "Callback HTTP(S); en production, HTTPS vers un hostname CALLBACK_ALLOWED_HOSTS" }
         lang: { type: string, example: fr }
         reference: { type: string }
     OrangeWebPaymentResponse:

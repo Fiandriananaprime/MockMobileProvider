@@ -1,6 +1,8 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { MockError, ProviderHttpError } from "../../shared/errors.js";
 import { orangeTxnId, randomHex } from "../../shared/ids.js";
+import { isCallbackUrlAllowed } from "../../shared/callback-url.js";
+import { constantTimeEqual } from "../../shared/secrets.js";
 import { getConfig, paymentSucceeds } from "../../mock/mock.service.js";
 import { debitProfile, getProfile } from "../../mock/profiles.js";
 import { orangeByNotifToken, orangeByPayToken, orangePayTokenByOrderId, orangeTokens } from "./orange.store.js";
@@ -18,8 +20,11 @@ export const TOKEN_TTL_SECONDS = 7_776_000; // value seen in SDK docs (90 days)
 const PAY_TOKEN_VALIDITY_MS = 10 * 60 * 1000; // OFFICIAL: default pay_token validity is 10 minutes
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const publicBaseUrl = (): string =>
-  (process.env.PUBLIC_BASE_URL ?? `http://localhost:${process.env.PORT ?? 4010}`).replace(/\/+$/, "");
+const publicBaseUrl = (): string => {
+  const baseUrl = process.env.PUBLIC_BASE_URL ??
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${process.env.PORT ?? 4010}`);
+  return baseUrl.replace(/\/+$/, "");
+};
 
 /* ------------------------------------------------------------------ auth */
 
@@ -29,7 +34,11 @@ const publicBaseUrl = (): string =>
  */
 export function handleTokenRequest(headers: IncomingHttpHeaders, body: unknown) {
   const auth = String(headers.authorization ?? "");
-  if (!auth.startsWith("Basic ") || auth.length < 8) {
+  const expectedAuth = process.env.NODE_ENV === "production" ? process.env.ORANGE_BASIC_AUTH ?? "" : undefined;
+  const validCredentials = expectedAuth === undefined
+    ? auth.startsWith("Basic ") && auth.length >= 8
+    : Boolean(expectedAuth) && constantTimeEqual(auth, expectedAuth);
+  if (!validCredentials) {
     throw new ProviderHttpError(401, {
       error: "invalid_client",
       error_description: "The requested client is not authorized (mock convention)",
@@ -68,6 +77,9 @@ export async function createWebPayment(headers: IncomingHttpHeaders, body: unkno
   const STRUCT = "WebPaymentInfo"; // ASSUMPTION (only affects error text)
   for (const f of ["merchant_key", "currency", "order_id", "return_url", "cancel_url", "notif_url"]) {
     if (typeof b[f] !== "string" || !(b[f] as string).trim()) throw orangeMissingField(STRUCT, f);
+  }
+  if (!isCallbackUrlAllowed(b.notif_url as string)) {
+    throw orangeError(400, 23, "Invalid callback URL", "notif_url must be HTTP(S), and HTTPS with an allowed host in production");
   }
   const amount = asAmount(b.amount);
   if (amount === null) throw orangeMissingField(STRUCT, "amount");
@@ -169,6 +181,8 @@ async function settle(tx: OrangeTransaction): Promise<void> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ status: tx.status, notif_token: tx.notifToken, txnid: tx.txnid }),
+      redirect: "error",
+      signal: AbortSignal.timeout(5000),
     });
   } catch (err) {
     console.warn(`[orange] notification to ${tx.request.notif_url} failed:`, (err as Error).message);

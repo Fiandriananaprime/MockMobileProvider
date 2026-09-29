@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { MockError } from "../shared/errors.js";
 import { mvolaByServerCorrelationId } from "../providers/mvola/mvola.store.js";
 import { orangeByPayToken } from "../providers/orange-money/orange.store.js";
@@ -11,6 +12,19 @@ const esc = (s: unknown): string =>
 
 /** EVERYTHING here is MOCK-ONLY and lives under /__mock. None of it exists in the real providers. */
 export const mockRoutes: FastifyPluginAsync = async (app) => {
+  app.addHook("onRequest", async (req, reply) => {
+    if (process.env.NODE_ENV !== "production" || /^\/__mock\/orange\/pay\/[a-f0-9]{64}(?:\/confirm)?(?:\?.*)?$/i.test(req.url)) return;
+
+    const expected = process.env.MOCK_ADMIN_TOKEN ?? "";
+    const authorization = req.headers.authorization ?? "";
+    const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    const expectedBytes = Buffer.from(expected);
+    const suppliedBytes = Buffer.from(supplied);
+    if (expectedBytes.length === 0 || expectedBytes.length !== suppliedBytes.length || !timingSafeEqual(expectedBytes, suppliedBytes)) {
+      reply.code(401).send({ error: "UNAUTHORIZED", message: "Valid mock admin token required" });
+    }
+  });
+
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof MockError) return reply.code(err.statusCode).send({ error: "MOCK_ERROR", message: err.message });
     const status = (err as { statusCode?: number }).statusCode ?? 500;

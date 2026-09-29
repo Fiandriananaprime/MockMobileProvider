@@ -1,6 +1,8 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { ProviderHttpError } from "../../shared/errors.js";
 import { numericReference, randomHex, uuid } from "../../shared/ids.js";
+import { isCallbackUrlAllowed } from "../../shared/callback-url.js";
+import { constantTimeEqual } from "../../shared/secrets.js";
 import { getConfig, paymentSucceeds } from "../../mock/mock.service.js";
 import { debitProfile, findProfileByMsisdn } from "../../mock/profiles.js";
 import {
@@ -34,7 +36,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export function handleTokenRequest(headers: IncomingHttpHeaders, body: unknown): MvolaTokenResponse {
   const auth = String(headers.authorization ?? "");
   const decoded = auth.startsWith("Basic ") ? Buffer.from(auth.slice(6), "base64").toString("utf8") : "";
-  if (!decoded.includes(":") || decoded.length < 3) {
+  const productionCredentials = process.env.NODE_ENV === "production"
+    ? `${process.env.MVOLA_CLIENT_KEY ?? ""}:${process.env.MVOLA_CLIENT_SECRET ?? ""}`
+    : undefined;
+  const validCredentials = productionCredentials === undefined
+    ? decoded.includes(":") && decoded.length >= 3
+    : Boolean(process.env.MVOLA_CLIENT_KEY && process.env.MVOLA_CLIENT_SECRET) && constantTimeEqual(decoded, productionCredentials);
+  if (!validCredentials) {
     throw new ProviderHttpError(401, {
       error: "invalid_client",
       error_description: "Client authentication failed (send Authorization: Basic base64(key:secret))",
@@ -118,6 +126,11 @@ function checkContractHeaders(headers: IncomingHttpHeaders): RequestContext {
   // Callback URL header: used by the community SDKs ("X-Callback-URL"); optional.
   const cb = headers["x-callback-url"];
   const callbackUrl = (Array.isArray(cb) ? cb[0] : cb)?.trim() || undefined;
+  if (callbackUrl && !isCallbackUrlAllowed(callbackUrl)) {
+    throw mvolaError(400, "validation", "formatError", "X-Callback-URL is not an allowed callback URL", [
+      { key: "X-Callback-URL", value: "must be HTTP(S), and HTTPS with an allowed host in production" },
+    ]);
+  }
 
   return { xCorrelationId, userLanguage: lang, merchantMsisdn: m[1], partnerName, callbackUrl };
 }
@@ -256,6 +269,8 @@ async function sendCallback(tx: MvolaTransaction): Promise<void> {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
+      redirect: "error",
+      signal: AbortSignal.timeout(5000),
     });
   } catch (err) {
     console.warn(`[mvola] callback to ${tx.callbackUrl} failed:`, (err as Error).message);
