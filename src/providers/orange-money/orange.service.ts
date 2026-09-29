@@ -1,7 +1,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { MockError, ProviderHttpError } from "../../shared/errors";
 import { orangeTxnId, randomHex } from "../../shared/ids";
-import { getConfig } from "../../mock/mock.service";
+import { getConfig, paymentSucceeds } from "../../mock/mock.service";
 import { debitProfile, getProfile } from "../../mock/profiles";
 import { orangeByNotifToken, orangeByPayToken, orangePayTokenByOrderId, orangeTokens } from "./orange.store";
 import {
@@ -156,7 +156,7 @@ export function confirmPayment(payToken: string, profileType: string): OrangeTra
 async function settle(tx: OrangeTransaction): Promise<void> {
   const cfg = getConfig();
   const profile = tx.profileType ? getProfile(tx.profileType) : undefined;
-  if (profile && cfg.scenario !== "insufficient_balance" && tx.amount <= profile.balance) {
+  if (profile && cfg.scenario !== "insufficient_balance" && tx.amount <= profile.balance && paymentSucceeds()) {
     debitProfile(profile.type, tx.amount);
     tx.status = "SUCCESS";
     tx.txnid = orangeTxnId();

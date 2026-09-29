@@ -84,7 +84,7 @@ Your Payment Service keeps calling only the real Orange endpoints.
 - **No arbitrary balances:** there is deliberately no endpoint to set a custom balance. To "top up", reset the profile.
 - **Not coupled to the Payment Service's own balance** — the mock only represents the external provider.
 
-**Deterministic outcome** (scenario `success`): unknown MVola debit MSISDN → `failed`; `amount <= balance` → success (balance debited); otherwise → failure.
+**Simulated outcome** (scenario `success`): after the default 1-second settlement delay, an unknown MVola debit MSISDN or insufficient balance fails; an eligible payment succeeds with 90% probability and debits the profile balance. The remaining 10% fail randomly. Orange uses the same rule after the customer confirms.
 
 ---
 
@@ -92,13 +92,13 @@ Your Payment Service keeps calling only the real Orange endpoints.
 
 | `scenario` | Effect (provider contract unchanged) |
 |---|---|
-| `success` (default) | Balance rule above |
+| `success` (default) | Eligible payments settle after `settleDelayMs` (default 1000 ms): 90% succeed and debit the profile balance; 10% fail randomly. Unknown accounts and insufficient balances always fail. |
 | `insufficient_balance` | Every payment fails |
 | `provider_error` | Initiation returns 5xx (MVola: 503 error object; Orange: 500 `{code,message,description}`) |
 | `timeout` | Initiation hangs `timeoutMs` (default 30 000) then returns 504 |
 | `always_pending` | Payments never settle (MVola stays `pending`; Orange stays `INITIATED`, or `PENDING` once confirmed) |
 
-Other config fields: `settleDelayMs` (default 2000), `timeoutMs`, `orangeAutoProfile` (`null` or `ORANGE_MONEY_n`).
+Other config fields: `settleDelayMs` (default 1000 ms), `timeoutMs`, `orangeAutoProfile` (`null` or `ORANGE_MONEY_n`).
 
 ---
 
@@ -138,10 +138,10 @@ Response: `{ "status": "pending"|"completed"|"failed", "serverCorrelationId", "n
 
 ### 3. Details — `GET .../merchantpay/1.0.0/{transID}`  (OFFICIAL; `transID` = `objectReference`)
 Response: `amount, currency, transactionReference, transactionStatus, createDate, debitParty, creditParty, metadata[originalTransactionResult, originalTransactionResultDesc], fees[{feeAmount}]`.
-- ASSUMPTION: result codes/descriptions (`0`/`Completed`, `1001`/`Insufficient funds`, `1002`/`Debit account not found`) — MVola's result table isn't public. Fee is always `"0"`.
+- ASSUMPTION: result codes/descriptions (`0`/`Completed`, `1001`/`Insufficient funds`, `1002`/`Debit account not found`, `1003`/random mock decline) — MVola's result table isn't public. Fee is always `"0"`.
 
 ### Callback (OFFICIAL shape)
-If `X-Callback-URL` was sent, the mock does `PUT <url>` on settlement with `transactionStatus, serverCorrelationId, transactionReference, requestDate, debitParty, creditParty, metadata` (+ `fees` when completed). Failures to reach your URL are logged and ignored.
+If `X-Callback-URL` was sent, the mock does `PUT <url>` on settlement (after 1 second by default) with `transactionStatus, serverCorrelationId, transactionReference, requestDate, debitParty, creditParty, metadata` (+ `fees` when completed). The final status is `completed` or `failed`; callback delivery failures are logged and ignored. The payment initiation still returns `pending`.
 
 ### Errors
 - **OFFICIAL:** invalid/missing token → **401** `{"fault":{"code":900901,"message":"Invalid Credentials","description":"Invalid Credentials. Make sure you have given the correct access token"}}`; HTTP codes 400/401/402/403/404/409/429/5xx as listed in the PDF.
@@ -173,7 +173,7 @@ Status meaning (OFFICIAL): `INITIATED` waiting for customer; `PENDING` customer 
 - ASSUMPTION: unknown or mismatching order/amount/pay_token → **404** `{code:60,…}`.
 
 ### Notification (OFFICIAL, observed)
-On settlement the mock `POST`s `{ "status", "notif_token", "txnid" }` to `notif_url` (no amount in the payload). Your service should verify `notif_token` and confirm via `transactionstatus`.
+After the customer confirms, the mock waits 1 second by default, then `POST`s `{ "status", "notif_token", "txnid" }` to `notif_url` (no amount in the payload). The final status is `SUCCESS` or `FAILED`. Your service should verify `notif_token` and confirm via `transactionstatus`.
 
 ### Errors
 - OFFICIAL shape `{ "code", "message", "description" }`; OFFICIAL example: **400** code `23` "Missing body field" (`Key: 'GetTransactionStatusInfo.OrderId' Error:Field validation …`).

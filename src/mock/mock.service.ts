@@ -5,6 +5,8 @@ import { getProfile, resetAllProfiles, resetProfile } from "./profiles";
 
 export const SCENARIOS = ["success", "insufficient_balance", "provider_error", "timeout", "always_pending"] as const;
 export type Scenario = (typeof SCENARIOS)[number];
+export const PAYMENT_SUCCESS_RATE = 0.9;
+export const paymentSucceeds = (): boolean => Math.random() < PAYMENT_SUCCESS_RATE;
 
 export interface MockConfig {
   scenario: Scenario;
@@ -16,7 +18,7 @@ export interface MockConfig {
   orangeAutoProfile: string | null;
 }
 
-const DEFAULTS: MockConfig = { scenario: "success", settleDelayMs: 2000, timeoutMs: 30_000, orangeAutoProfile: null };
+const DEFAULTS: MockConfig = { scenario: "success", settleDelayMs: 1000, timeoutMs: 30_000, orangeAutoProfile: null };
 let config: MockConfig = { ...DEFAULTS };
 
 export const getConfig = (): MockConfig => config;

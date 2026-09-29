@@ -83,7 +83,8 @@ paths:
       operationId: mvolaInitiate
       summary: Initier un paiement (Merchant Pay)
       description: |
-        Retourne `pending`. Le résultat final s'obtient par polling (status) ou par callback si `X-Callback-URL`
+        Retourne `pending`. Après 1 seconde par défaut, un compte connu avec un solde suffisant réussit à 90%; sinon
+        le statut final est `failed`. Le résultat s'obtient par polling (status) ou par callback si `X-Callback-URL`
         est envoyé (le mock fait alors un `PUT` vers cette URL).
 
         Le profil fictif est déterminé par `debitParty.msisdn` (le `fakeMsisdn` du profil, ex. `03435000005`
@@ -388,7 +389,9 @@ paths:
       summary: Initier un paiement WebPay
       description: |
         Retourne un `pay_token` et une `payment_url`. Ici `payment_url` pointe vers la page mock
-        `/__mock/orange/pay/{pay_token}`. Le client (simulé) y choisit un profil ORANGE_MONEY_n.
+        `/__mock/orange/pay/{pay_token}`. Le client (simulé) y choisit un profil ORANGE_MONEY_n. Après confirmation,
+        le mock attend 1 seconde par défaut, puis règle le paiement : profil existant et solde suffisant donnent
+        90% de chances de `SUCCESS`; les autres résultats sont `FAILED`. Une notification est envoyée à `notif_url`.
       security:
         - bearerAuth: []
       parameters:
@@ -619,7 +622,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MockConfig" }
-              example: { scenario: success, settleDelayMs: 2000, timeoutMs: 30000, orangeAutoProfile: null }
+              example: { scenario: success, settleDelayMs: 1000, timeoutMs: 30000, orangeAutoProfile: null }
     post:
       tags: [Mock]
       operationId: mockUpdateConfig
@@ -1104,7 +1107,7 @@ components:
       type: object
       properties:
         scenario: { $ref: "#/components/schemas/Scenario" }
-        settleDelayMs: { type: integer, minimum: 0, default: 2000 }
+        settleDelayMs: { type: integer, minimum: 0, default: 1000 }
         timeoutMs: { type: integer, minimum: 0, default: 30000 }
         orangeAutoProfile: { type: string, nullable: true, pattern: "^ORANGE_MONEY_[1-5]$" }
     MockConfigUpdate:
@@ -1118,7 +1121,8 @@ components:
       type: string
       enum: [success, insufficient_balance, provider_error, timeout, always_pending]
       description: |
-        success : montant <= solde => succès, sinon échec. insufficient_balance : tout échoue.
+        success : après settleDelayMs (1000 ms par défaut), un paiement avec compte connu et solde suffisant réussit
+        avec 90% de probabilité; sinon il échoue. insufficient_balance : tout échoue.
         provider_error : initiation en 5xx. timeout : initiation en 504 après timeoutMs.
         always_pending : ne se règle jamais.
     MockError:

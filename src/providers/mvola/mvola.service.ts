@@ -1,7 +1,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { ProviderHttpError } from "../../shared/errors";
 import { numericReference, randomHex, uuid } from "../../shared/ids";
-import { getConfig } from "../../mock/mock.service";
+import { getConfig, paymentSucceeds } from "../../mock/mock.service";
 import { debitProfile, findProfileByMsisdn } from "../../mock/profiles";
 import {
   mvolaByPartnerReference,
@@ -204,11 +204,10 @@ export async function initiatePayment(headers: IncomingHttpHeaders, body: unknow
 }
 
 /**
- * Deterministic outcome:
+ * Simulated outcome:
  *  - unknown debit MSISDN            -> failed
- *  - scenario insufficient_balance   -> failed
- *  - amount <= profile balance       -> completed (balance debited)
- *  - otherwise                       -> failed
+ *  - insufficient balance            -> failed
+ *  - eligible payment                -> 90% completed, 10% failed
  * Result codes/descriptions are ASSUMPTIONS (MVola's result-code table is not public).
  */
 async function settle(tx: MvolaTransaction): Promise<void> {
@@ -222,6 +221,10 @@ async function settle(tx: MvolaTransaction): Promise<void> {
     tx.profileType = profile.type;
     tx.resultCode = "1001";
     tx.resultDesc = "Insufficient funds";
+  } else if (!paymentSucceeds()) {
+    tx.profileType = profile.type;
+    tx.resultCode = "1003";
+    tx.resultDesc = "Payment declined (mock random failure)";
   } else {
     tx.profileType = profile.type;
     debitProfile(profile.type, tx.amount);
