@@ -39,6 +39,8 @@ Vercel serves the API through `api/index.js`, which exports a Node.js request ha
 
 Each user registers one wallet with a provider. The server generates a unique MSISDN from the configured provider prefixes; the frontend cannot choose the MSISDN or initial balance.
 
+To create a wallet and receive its generated phone number, use the [User Frontend](https://dramatic-core-wallet-flow.base44.app/). Choose MVola or Orange Money and register with a password; the backend returns the generated MSISDN.
+
 User endpoints:
 
 ```text
@@ -49,7 +51,17 @@ GET  /account/balance
 GET  /account/transactions
 POST /account/topup
 POST /account/reset
+POST /__mock/verification/sendVerification
+GET  /__mock/verification/notifications?phoneNumber=%2B261341234567
+POST /__mock/verification/verify
 ```
+
+`sendVerification` accepts `{ "phoneNumber": "+261341234567" }`, generates a short-lived
+six-digit code and returns only `{ accepted, expiresAt }`. The code is visible through the
+mock notification endpoint. Verification accepts the same phone number and `{ "code": "123456" }`;
+codes expire after five minutes and are single-use. The two POST endpoints require the
+internal `X-API-Key` configured with `MOCK_PROVIDER_API_KEY`; the notification GET endpoint
+is intended for the local frontend and does not receive that server-to-server secret.
 
 After login, send `Authorization: Bearer <USER_ACCESS_TOKEN>`. Account identity comes only from the signed token, and transactions are scoped to that account. Successful top-ups and resets are recorded in the ledger; the top-up limit is configured by `MAX_BALANCE`.
 
@@ -101,6 +113,7 @@ User Frontend
   v
 Mock Provider
   ├── /auth/* and /account/*
+  ├── /__mock/verification/* (OTP + SMS notifications)
   └── PostgreSQL (user's account only)
 
 Admin Frontend

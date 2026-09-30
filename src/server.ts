@@ -13,6 +13,7 @@ import { adminRoutes } from "./admin/admin.routes.js";
 import { mvolaRoutes } from "./providers/mvola/mvola.routes.js";
 import { orangeRoutes } from "./providers/orange-money/orange.routes.js";
 import { mockRoutes } from "./mock/mock.routes.js";
+import { verificationRoutes } from "./mock/verification.routes.js";
 
 export async function buildServer(config: RuntimeConfig = loadRuntimeConfig()) {
   await ensureDatabaseReady(config);
@@ -30,7 +31,7 @@ export async function buildServer(config: RuntimeConfig = loadRuntimeConfig()) {
   await app.register(cors, {
     delegator: (request, callback) => {
       const isAdminApi = request.url.startsWith("/admin/");
-      const isUserApi = request.url.startsWith("/auth/") || request.url === "/account" || request.url.startsWith("/account/");
+      const isUserApi = request.url.startsWith("/auth/") || request.url === "/account" || request.url.startsWith("/account/") || request.url.startsWith("/__mock/verification/");
       const allowedOrigins = isAdminApi
         ? config.adminFrontendOrigins
         : isUserApi
@@ -53,6 +54,7 @@ export async function buildServer(config: RuntimeConfig = loadRuntimeConfig()) {
   await app.register(mvolaRoutes);
   await app.register(orangeRoutes);
   await app.register(mockRoutes);
+  await app.register(verificationRoutes);
   app.addHook("onClose", closeDatabase);
   return app;
 }

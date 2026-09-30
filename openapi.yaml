@@ -910,6 +910,84 @@ paths:
               schema: { $ref: "#/components/schemas/MockError" }
               example: { error: MOCK_ERROR, message: "Transaction is SUCCESS, cannot confirm" }
 
+  /__mock/verification/sendVerification:
+    post:
+      tags: [Mock]
+      operationId: mockSendPhoneVerification
+      summary: Générer un OTP téléphone et le déposer dans la boîte de notifications mock
+      description: Le code n'est jamais retourné par cette réponse. Il est consultable via la route de notifications du numéro.
+      security:
+        - providerApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PhoneVerificationRequest" }
+            example: { phoneNumber: "+261341234567" }
+      responses:
+        "202":
+          description: Demande acceptée
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhoneVerificationAccepted" }
+        "400":
+          description: Numéro invalide
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /__mock/verification/verify:
+    post:
+      tags: [Mock]
+      operationId: mockVerifyPhoneVerification
+      summary: Vérifier un OTP téléphone
+      security:
+        - providerApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PhoneVerificationVerifyRequest" }
+      responses:
+        "200":
+          description: Code accepté
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhoneVerificationResult" }
+        "400":
+          description: Code invalide, expiré ou déjà consommé
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /__mock/verification/notifications:
+    get:
+      tags: [Mock]
+      operationId: mockListPhoneNotifications
+      summary: Lire les notifications SMS simulées d'un numéro
+      parameters:
+        - name: phoneNumber
+          in: query
+          required: true
+          schema: { type: string, pattern: "^\\+[1-9]\\d{7,14}$" }
+      responses:
+        "200":
+          description: Notifications reçues
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications]
+                properties:
+                  notifications:
+                    type: array
+                    items: { $ref: "#/components/schemas/PhoneVerificationNotification" }
+        "400":
+          description: Numéro invalide
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
 # ====================================================================
 components:
   securitySchemes:
@@ -931,6 +1009,11 @@ components:
       type: http
       scheme: bearer
       description: Token obtenu via /token (MVola) ou /oauth/v3/token (Orange). Chaque fournisseur a ses propres tokens.
+    providerApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Clé interne utilisée par nova-auth-service pour les opérations OTP mock.
 
   parameters:
     Version:
@@ -1114,6 +1197,41 @@ components:
       properties:
         error: { type: string }
         message: { type: string }
+    PhoneVerificationRequest:
+      type: object
+      required: [phoneNumber]
+      additionalProperties: false
+      properties:
+        phoneNumber: { type: string, pattern: "^\\+[1-9]\\d{7,14}$" }
+    PhoneVerificationVerifyRequest:
+      type: object
+      required: [phoneNumber, code]
+      additionalProperties: false
+      properties:
+        phoneNumber: { type: string, pattern: "^\\+[1-9]\\d{7,14}$" }
+        code: { type: string, pattern: "^\\d{6}$" }
+    PhoneVerificationAccepted:
+      type: object
+      required: [accepted, expiresAt]
+      properties:
+        accepted: { type: boolean, const: true }
+        expiresAt: { type: string, format: date-time }
+    PhoneVerificationResult:
+      type: object
+      required: [verified]
+      properties:
+        verified: { type: boolean, enum: [true] }
+    PhoneVerificationNotification:
+      type: object
+      required: [id, type, phoneNumber, message, otp, createdAt, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [PHONE_VERIFICATION] }
+        phoneNumber: { type: string }
+        message: { type: string }
+        otp: { type: string, pattern: "^\\d{6}$" }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
     # ---- MVola
     KeyValue:
       type: object

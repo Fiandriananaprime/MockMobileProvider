@@ -11,6 +11,7 @@ const userSecret = "test-user-auth-secret-with-at-least-32-bytes";
 const previousEnvironment = {};
 const envNames = [
   "NODE_ENV", "DATABASE_URL", "USER_AUTH_SECRET", "MOCK_ADMIN_TOKEN", "MAX_BALANCE",
+  "MOCK_PROVIDER_API_KEY",
   "MVOLA_MSISDN_PREFIXES", "ORANGE_MONEY_MSISDN_PREFIXES", "USER_FRONTEND_ORIGINS",
   "ADMIN_FRONTEND_ORIGINS", "CALLBACK_ALLOWED_HOSTS", "MVOLA_CLIENT_KEY",
   "MVOLA_CLIENT_SECRET", "ORANGE_BASIC_AUTH",
@@ -36,6 +37,7 @@ before(async () => {
   process.env.USER_AUTH_SECRET = userSecret;
   process.env.MOCK_ADMIN_TOKEN = adminToken;
   process.env.MAX_BALANCE = "10000000";
+  process.env.MOCK_PROVIDER_API_KEY = "test-mock-provider-api-key-0123456789";
   process.env.MVOLA_MSISDN_PREFIXES = "034,038";
   process.env.ORANGE_MONEY_MSISDN_PREFIXES = "032,037";
   process.env.USER_FRONTEND_ORIGINS = "http://localhost:5175";

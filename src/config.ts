@@ -4,6 +4,7 @@ export interface RuntimeConfig {
   databaseUrl: string;
   userAuthSecret: string;
   maxBalance: number;
+  providerApiKey: string;
   msisdnPrefixes: Record<ProviderType, string[]>;
   userFrontendOrigins: string[];
   adminFrontendOrigins: string[];
@@ -62,10 +63,15 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
   }
 
   const isProduction = env.NODE_ENV === "production";
+  const providerApiKey = env.MOCK_PROVIDER_API_KEY?.trim() ?? "";
+  if (isProduction && providerApiKey.length < 32) {
+    throw new Error("MOCK_PROVIDER_API_KEY must contain at least 32 characters in production");
+  }
   return {
     databaseUrl,
     userAuthSecret,
     maxBalance,
+    providerApiKey: providerApiKey || "local-mock-provider-key-change-me-32chars",
     msisdnPrefixes: {
       MVOLA: parsePrefixes("MVOLA_MSISDN_PREFIXES", env.MVOLA_MSISDN_PREFIXES, ["034", "038"]),
       ORANGE_MONEY: parsePrefixes("ORANGE_MONEY_MSISDN_PREFIXES", env.ORANGE_MONEY_MSISDN_PREFIXES, ["032", "037"]),
