@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   listNotifications,
   sendVerification,
+  subscribeToNotifications,
   verifyVerification,
 } from "../dist/mock/verification.store.js";
 
@@ -29,4 +30,18 @@ test("a new phone verification invalidates the previous code", () => {
   assert.notEqual(first, second);
   assert.equal(verifyVerification(phoneNumber, first), false);
   assert.equal(verifyVerification(phoneNumber, second), true);
+});
+
+test("phone verification is pushed to connected WebSocket subscribers", () => {
+  const phoneNumber = "+261341234569";
+  const messages = [];
+  const socket = { readyState: 1, send: (payload) => messages.push(JSON.parse(payload)) };
+  const unsubscribe = subscribeToNotifications(phoneNumber, socket);
+
+  sendVerification(phoneNumber);
+  unsubscribe();
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].phoneNumber, phoneNumber);
+  assert.equal(messages[0].type, "PHONE_VERIFICATION");
 });

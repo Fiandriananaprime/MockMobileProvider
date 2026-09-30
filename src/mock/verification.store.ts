@@ -22,6 +22,8 @@ interface PendingVerification {
 
 const pendingByPhone = new Map<string, PendingVerification>();
 const notificationsByPhone = new Map<string, VerificationNotification[]>();
+const subscribersByPhone = new Map<string, Set<{ send(payload: string): void; readyState: number }>>();
+const OPEN = 1;
 
 export function normalizePhoneNumber(value: unknown): string {
   if (typeof value !== "string" || !/^\+[1-9]\d{7,14}$/.test(value)) {
@@ -49,8 +51,25 @@ export function sendVerification(phoneNumber: string): { expiresAt: string } {
   const notifications = notificationsByPhone.get(phoneNumber) ?? [];
   notifications.unshift(notification);
   notificationsByPhone.set(phoneNumber, notifications.slice(0, MAX_NOTIFICATIONS_PER_PHONE));
+  const payload = JSON.stringify(notification);
+  for (const subscriber of subscribersByPhone.get(phoneNumber) ?? []) {
+    if (subscriber.readyState === OPEN) subscriber.send(payload);
+  }
 
   return { expiresAt: notification.expiresAt };
+}
+
+export function subscribeToNotifications(
+  phoneNumber: string,
+  socket: { send(payload: string): void; readyState: number },
+): () => void {
+  const subscribers = subscribersByPhone.get(phoneNumber) ?? new Set();
+  subscribers.add(socket);
+  subscribersByPhone.set(phoneNumber, subscribers);
+  return () => {
+    subscribers.delete(socket);
+    if (subscribers.size === 0) subscribersByPhone.delete(phoneNumber);
+  };
 }
 
 export function verifyVerification(phoneNumber: string, code: string): boolean {

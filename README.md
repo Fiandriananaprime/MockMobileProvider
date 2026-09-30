@@ -53,13 +53,16 @@ POST /account/topup
 POST /account/reset
 POST /__mock/verification/sendVerification
 GET  /__mock/verification/notifications?phoneNumber=%2B261341234567
+WS   /__mock/verification/ws?phoneNumber=%2B261341234567
 POST /__mock/verification/verify
 ```
 
 `sendVerification` accepts `{ "phoneNumber": "+261341234567" }`, generates a short-lived
 six-digit code and returns only `{ accepted, expiresAt }`. The code is visible through the
 mock notification endpoint. Verification accepts the same phone number and `{ "code": "123456" }`;
-codes expire after five minutes and are single-use. The two POST endpoints require the
+codes expire after five minutes and are single-use. The frontend reads existing notifications once,
+then keeps a WebSocket open on `/__mock/verification/ws` to receive new notifications immediately;
+there is no five-second polling. The two POST endpoints require the
 internal `X-API-Key` configured with `MOCK_PROVIDER_API_KEY`; the notification GET endpoint
 is intended for the local frontend and does not receive that server-to-server secret.
 
@@ -113,7 +116,7 @@ User Frontend
   v
 Mock Provider
   ├── /auth/* and /account/*
-  ├── /__mock/verification/* (OTP + SMS notifications)
+  ├── /__mock/verification/* (OTP + WebSocket SMS notifications)
   └── PostgreSQL (user's account only)
 
 Admin Frontend

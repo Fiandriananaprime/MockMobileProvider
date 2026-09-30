@@ -988,6 +988,25 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /__mock/verification/ws:
+    get:
+      tags: [Mock]
+      operationId: mockPhoneVerificationWebSocket
+      summary: Flux WebSocket des notifications SMS mock
+      description: |
+        Connexion WebSocket avec `phoneNumber` en query string. Le serveur envoie chaque
+        `PhoneVerificationNotification` dès sa génération; il n'y a pas de polling.
+      parameters:
+        - name: phoneNumber
+          in: query
+          required: true
+          schema: { type: string, pattern: "^\\+[1-9]\\d{7,14}$" }
+      responses:
+        "101":
+          description: Switching Protocols
+        "1008":
+          description: Numéro invalide
+
 # ====================================================================
 components:
   securitySchemes:
@@ -1214,7 +1233,7 @@ components:
       type: object
       required: [accepted, expiresAt]
       properties:
-        accepted: { type: boolean, const: true }
+        accepted: { type: boolean }
         expiresAt: { type: string, format: date-time }
     PhoneVerificationResult:
       type: object

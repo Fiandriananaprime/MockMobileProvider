@@ -7,6 +7,7 @@ import {
   listNotifications,
   normalizePhoneNumber,
   sendVerification,
+  subscribeToNotifications,
   verifyVerification,
 } from "./verification.store.js";
 
@@ -23,6 +24,20 @@ const requireApiKey = (request: { headers: IncomingHttpHeaders }): void => {
 };
 
 export const verificationRoutes: FastifyPluginAsync = async (app) => {
+  app.get("/__mock/verification/ws", { websocket: true }, (socket, request) => {
+    let phoneNumber: string;
+    try {
+      phoneNumber = normalizePhoneNumber((request.query as { phoneNumber?: unknown } | undefined)?.phoneNumber);
+    } catch {
+      socket.close(1008, "Invalid phone number");
+      return;
+    }
+
+    const unsubscribe = subscribeToNotifications(phoneNumber, socket);
+    socket.on("close", unsubscribe);
+    socket.on("error", unsubscribe);
+  });
+
   app.post("/__mock/verification/sendVerification", async (request, reply) => {
     requireApiKey(request);
     const body = bodyOf(request);

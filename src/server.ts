@@ -2,6 +2,7 @@ import "dotenv/config";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import formbody from "@fastify/formbody";
 import { pathToFileURL } from "node:url";
 import { accountRoutes } from "./accounts/account.routes.js";
@@ -18,6 +19,7 @@ import { verificationRoutes } from "./mock/verification.routes.js";
 export async function buildServer(config: RuntimeConfig = loadRuntimeConfig()) {
   await ensureDatabaseReady(config);
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
+  await app.register(websocket);
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ApiError) {
