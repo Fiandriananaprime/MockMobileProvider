@@ -4,9 +4,10 @@ import { loadRuntimeConfig, type ProviderType } from "../config.js";
 import { ApiError } from "../shared/errors.js";
 import { createUserAccessToken, hashPassword, validatePassword, verifyPassword } from "./user-auth.js";
 
-const publicAccount = (account: { provider: ProviderType; msisdn: string; balance: number; currency: string; status: string }) => ({
+const publicAccount = (account: { provider: ProviderType; msisdn: string; accountName: string | null; balance: number; currency: string; status: string }) => ({
   provider: account.provider,
   msisdn: account.msisdn,
+  accountName: account.accountName,
   balance: account.balance,
   currency: account.currency,
   status: account.status,
@@ -22,9 +23,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw new ApiError(400, "INVALID_PASSWORD", "password must contain between 8 and 128 characters");
     }
 
+    if (body.accountName !== undefined && (typeof body.accountName !== "string" || body.accountName.trim().length < 1 || body.accountName.trim().length > 120)) {
+      throw new ApiError(400, "INVALID_ACCOUNT_NAME", "accountName must contain between 1 and 120 characters");
+    }
+
     const config = loadRuntimeConfig();
     const passwordHash = await hashPassword(body.password);
-    const account = await createAccount(body.provider, config.msisdnPrefixes[body.provider], passwordHash);
+    const accountName = typeof body.accountName === "string" ? body.accountName.trim() : null;
+    const account = await createAccount(body.provider, config.msisdnPrefixes[body.provider], passwordHash, accountName);
     return reply.code(201).send(publicAccount(account));
   });
 
