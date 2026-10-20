@@ -1,0 +1,57 @@
+name: Supabase keep-alive
+
+on:
+  schedule:
+    # Twice daily at 00:17 and 12:17 UTC.
+    - cron: "17 */12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-keep-alive
+  cancel-in-progress: false
+
+jobs:
+  database-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev
+
+      - name: Run a lightweight database query
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { Pool } from "pg";
+
+          const connectionString = process.env.SUPABASE_DATABASE_URL;
+          if (!connectionString) {
+            throw new Error("Missing GitHub Actions secret: SUPABASE_DATABASE_URL");
+          }
+
+          const pool = new Pool({
+            connectionString,
+            connectionTimeoutMillis: 15_000,
+            max: 1,
+          });
+
+          try {
+            await pool.query("SELECT 1");
+            console.log("Supabase database connection and query succeeded.");
+          } finally {
+            await pool.end();
+          }
+          NODE
