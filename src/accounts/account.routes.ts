@@ -42,7 +42,7 @@ export const accountRoutes: FastifyPluginAsync = async (app) => {
     if (params.provider !== "MVOLA" && params.provider !== "ORANGE_MONEY") {
       throw new ApiError(400, "INVALID_PROVIDER", "provider must be MVOLA or ORANGE_MONEY");
     }
-    if (!params.msisdn || !/^\\d{10}$/.test(params.msisdn)) {
+    if (!params.msisdn || !/^\d{10}$/.test(params.msisdn)) {
       throw new ApiError(400, "INVALID_MSISDN", "msisdn must contain 10 digits");
     }
     const identity = await getAccountIdentity(params.provider, params.msisdn);
