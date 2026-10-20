@@ -12,6 +12,7 @@ export interface AccountRecord {
   id: string;
   provider: ProviderType;
   msisdn: string;
+  accountName: string | null;
   passwordHash: string;
   balance: number;
   currency: string;
@@ -40,6 +41,7 @@ interface PublicAccountRow extends QueryResultRow {
   id: string;
   provider: ProviderType;
   msisdn: string;
+  accountName: string | null;
   balance: string | number;
   currency: string;
   status: AccountStatus;
@@ -65,9 +67,9 @@ interface TransactionRow extends QueryResultRow {
   createdAt: Date | string;
 }
 
-const ACCOUNT_FIELDS = `id, provider, msisdn, password_hash AS "passwordHash", balance,
+const ACCOUNT_FIELDS = `id, provider, msisdn, account_name AS "accountName", password_hash AS "passwordHash", balance,
   currency, status, created_at AS "createdAt", updated_at AS "updatedAt"`;
-const PUBLIC_ACCOUNT_FIELDS = `id, provider, msisdn, balance, currency, status,
+const PUBLIC_ACCOUNT_FIELDS = `id, provider, msisdn, account_name AS "accountName", balance, currency, status,
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 const TRANSACTION_FIELDS = `id, account_id AS "accountId", provider, type, amount, currency,
   status, reference, balance_before AS "balanceBefore", balance_after AS "balanceAfter",
@@ -133,17 +135,18 @@ export async function createAccount(
   provider: ProviderType,
   prefixes: string[],
   passwordHash: string,
+  accountName: string | null = null,
 ): Promise<AccountRecord> {
   const pool = database();
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const prefix = prefixes[randomInt(prefixes.length)];
     const msisdn = `${prefix}${randomInt(10_000_000).toString().padStart(7, "0")}`;
     const result = await pool.query<AccountRow>(
-      `INSERT INTO mock_accounts (provider, msisdn, password_hash, balance, currency, status)
-       VALUES ($1, $2, $3, 0, 'MGA', 'ACTIVE')
+      `INSERT INTO mock_accounts (provider, msisdn, account_name, password_hash, balance, currency, status)
+       VALUES ($1, $2, $3, $4, 0, 'MGA', 'ACTIVE')
        ON CONFLICT (msisdn) DO NOTHING
        RETURNING ${ACCOUNT_FIELDS}`,
-      [provider, msisdn, passwordHash],
+      [provider, msisdn, accountName, passwordHash],
     );
     if (result.rows[0]) return toAccount(result.rows[0]);
   }
@@ -156,6 +159,26 @@ export async function getAccountByMsisdn(msisdn: string): Promise<AccountRecord 
     [msisdn.replace(/\s+/g, "")],
   );
   return result.rows[0] ? toAccount(result.rows[0]) : undefined;
+}
+
+export async function getAccountIdentity(provider: ProviderType, msisdn: string): Promise<Pick<PublicAccountRecord, "provider" | "msisdn" | "accountName" | "status"> | undefined> {
+  const result = await database().query<PublicAccountRow>(
+    `SELECT provider, msisdn, account_name AS "accountName", status
+     FROM mock_accounts WHERE provider = $1 AND msisdn = $2`,
+    [provider, msisdn.replace(/\\s+/g, "")],
+  );
+  const row = result.rows[0];
+  return row ? { provider: row.provider, msisdn: row.msisdn, accountName: row.accountName, status: row.status } : undefined;
+}
+
+export async function updateAccountName(accountId: string, accountName: string): Promise<AccountRecord> {
+  const result = await database().query<AccountRow>(
+    `UPDATE mock_accounts SET account_name = $2, updated_at = NOW()
+     WHERE id = $1 RETURNING ${ACCOUNT_FIELDS}`,
+    [accountId, accountName],
+  );
+  if (!result.rows[0]) throw new ApiError(404, "ACCOUNT_NOT_FOUND", "Account not found");
+  return toAccount(result.rows[0]);
 }
 
 export async function getAccountById(id: string): Promise<AccountRecord | undefined> {
