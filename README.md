@@ -86,6 +86,35 @@ curl -X POST http://localhost:4010/auth/register \
 
 The Payment Service keeps using the provider routes only (`/token`, `/mvola/*`, `/oauth/v3/token`, `/orange-money-webpay/*`), never `/admin/*`.
 
+## Account names and identity lookup
+
+Wallets may have an optional display/account-holder name (for example, `Rakoto Jean` or `Lidl`). Set it during registration or update it later. This is mock data supplied by the test account owner; it is **not** independently verified by MVola or Orange Money.
+
+Set a name at registration:
+
+```json
+{ "provider": "MVOLA", "password": "secret123", "accountName": "Rakoto Jean" }
+```
+
+Update the currently authenticated wallet:
+
+```http
+PATCH /account/name
+Authorization: Bearer <USER_ACCESS_TOKEN>
+Content-Type: application/json
+
+{ "accountName": "Rakoto Jean" }
+```
+
+NovaMarket's backend can resolve a wallet name by provider and MSISDN using the server-to-server endpoint. Send the configured `MOCK_PROVIDER_API_KEY` in `X-API-Key`; never expose this key in a browser/frontend:
+
+```http
+GET /internal/accounts/MVOLA/0341234567
+X-API-Key: <MOCK_PROVIDER_API_KEY>
+```
+
+Example response: `{ "provider": "MVOLA", "msisdn": "0341234567", "accountName": "Rakoto Jean", "status": "ACTIVE" }`. A missing account returns `404`; an account without a name returns `"accountName": null`. This lookup is a **mock-only directory**, not a real provider name-validation API. A supplied name must not be treated as proof of ownership or used alone to approve a payout.
+
 ## Database schema
 
 The repository includes the final PostgreSQL schema at `database/schema.sql` and versioned migration `database/migrations/001_mock_user_accounts.sql`:
