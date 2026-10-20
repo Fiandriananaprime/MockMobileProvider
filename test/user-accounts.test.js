@@ -219,6 +219,25 @@ test("registration generates unique provider numbers and stores only password ha
   assert.notEqual(stored.rows[0].password_hash, "secret123");
 });
 
+test("account names can be set and resolved by provider plus MSISDN", async () => {
+  const user = await register("MVOLA");
+  const token = (await login(user)).json().accessToken;
+
+  const missingName = await app.inject({ method: "GET", url: `/internal/accounts/MVOLA/${user.msisdn}`, headers: { "x-api-key": process.env.MOCK_PROVIDER_API_KEY } });
+  assert.equal(missingName.statusCode, 200);
+  assert.equal(missingName.json().accountName, null);
+
+  const patched = await app.inject({ method: "PATCH", url: "/account/name", headers: { ...bearer(token), "content-type": "application/json" }, payload: { accountName: "Rakoto Jean" } });
+  assert.equal(patched.statusCode, 200, patched.body);
+  assert.equal(patched.json().accountName, "Rakoto Jean");
+
+  const found = await app.inject({ method: "GET", url: `/internal/accounts/MVOLA/${user.msisdn}`, headers: { "x-api-key": process.env.MOCK_PROVIDER_API_KEY } });
+  assert.equal(found.statusCode, 200, found.body);
+  assert.deepEqual(found.json(), { provider: "MVOLA", msisdn: user.msisdn, accountName: "Rakoto Jean", status: "ACTIVE" });
+  assert.equal((await app.inject({ method: "GET", url: `/internal/accounts/MVOLA/${user.msisdn}` })).statusCode, 401);
+  assert.equal((await app.inject({ method: "GET", url: `/internal/accounts/ORANGE_MONEY/${user.msisdn}`, headers: { "x-api-key": process.env.MOCK_PROVIDER_API_KEY } })).statusCode, 404);
+});
+
 test("deployment migration runner records applied migrations and is safe to rerun", async () => {
   const results = await Promise.all([
     runDatabaseMigrations(database),
@@ -226,7 +245,7 @@ test("deployment migration runner records applied migrations and is safe to reru
   ]);
   assert.deepEqual(results, [[], []]);
   const recorded = await database.query("SELECT name FROM schema_migrations ORDER BY name");
-  assert.deepEqual(recorded.rows.map((row) => row.name), ["001_mock_user_accounts.sql"]);
+  assert.deepEqual(recorded.rows.map((row) => row.name), ["001_mock_user_accounts.sql", "002_account_name.sql"]);
 });
 
 test("login issues a user-only token and account identity comes from that token", async () => {
