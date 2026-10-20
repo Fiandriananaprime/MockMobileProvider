@@ -165,7 +165,7 @@ export async function getAccountIdentity(provider: ProviderType, msisdn: string)
   const result = await database().query<PublicAccountRow>(
     `SELECT provider, msisdn, account_name AS "accountName", status
      FROM mock_accounts WHERE provider = $1 AND msisdn = $2`,
-    [provider, msisdn.replace(/\\s+/g, "")],
+    [provider, msisdn.replace(/\s+/g, "")],
   );
   const row = result.rows[0];
   return row ? { provider: row.provider, msisdn: row.msisdn, accountName: row.accountName, status: row.status } : undefined;
