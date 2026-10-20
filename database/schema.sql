@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS mock_accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   provider TEXT NOT NULL CHECK (provider IN ('MVOLA', 'ORANGE_MONEY')),
   msisdn TEXT NOT NULL UNIQUE,
+  account_name TEXT,
   password_hash TEXT NOT NULL,
   balance NUMERIC(18, 2) NOT NULL DEFAULT 0 CHECK (balance >= 0),
   currency TEXT NOT NULL DEFAULT 'MGA',
