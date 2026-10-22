@@ -428,3 +428,67 @@ test("simultaneous MVola payments cannot overdraw the same PostgreSQL wallet", a
     Math.random = originalRandom;
   }
 });
+
+test("internal payouts atomically debit and credit wallets and replay idempotently", async () => {
+  setScenario("success", 0);
+  const sender = await register("MVOLA");
+  const recipient = await register("MVOLA");
+  const senderLogin = await login(sender);
+  const recipientLogin = await login(recipient);
+  const senderToken = senderLogin.json().accessToken;
+  const recipientToken = recipientLogin.json().accessToken;
+  assert.equal(senderLogin.statusCode, 200);
+  assert.equal(recipientLogin.statusCode, 200);
+  assert.equal((await topUp(senderToken, 5000)).statusCode, 200);
+
+  const payload = {
+    provider: "MVOLA",
+    senderMsisdn: sender.msisdn,
+    recipientMsisdn: recipient.msisdn,
+    amount: 1750,
+    reference: "seller-payout-test-001",
+  };
+  const headers = {
+    "x-api-key": process.env.MOCK_PROVIDER_API_KEY,
+    "idempotency-key": "seller-payout-idempotency-001",
+    "content-type": "application/json",
+  };
+  const first = await app.inject({ method: "POST", url: "/internal/payouts", headers, payload });
+  assert.equal(first.statusCode, 201, first.body);
+  assert.equal(first.json().status, "COMPLETED");
+  assert.equal(first.json().senderBalanceAfter, 3250);
+  assert.equal(first.json().recipientBalanceAfter, 1750);
+
+  const replay = await app.inject({ method: "POST", url: "/internal/payouts", headers, payload });
+  assert.equal(replay.statusCode, 200, replay.body);
+  assert.equal(replay.json().id, first.json().id);
+
+  const senderBalance = await app.inject({ method: "GET", url: "/account/balance", headers: bearer(senderToken) });
+  const recipientBalance = await app.inject({ method: "GET", url: "/account/balance", headers: bearer(recipientToken) });
+  assert.equal(senderBalance.json().balance, 3250);
+  assert.equal(recipientBalance.json().balance, 1750);
+
+  const received = await app.inject({ method: "GET", url: "/account/transactions", headers: bearer(recipientToken) });
+  assert.ok(received.json().transactions.some((tx) => tx.type === "PAYOUT_RECEIVED" && tx.reference === payload.reference));
+});
+
+test("internal payouts reject idempotency-key reuse for a different request", async () => {
+  const sender = await register("ORANGE_MONEY");
+  const recipient = await register("ORANGE_MONEY");
+  const headers = {
+    "x-api-key": process.env.MOCK_PROVIDER_API_KEY,
+    "idempotency-key": "seller-payout-conflict-001",
+    "content-type": "application/json",
+  };
+  const payload = { provider: "ORANGE_MONEY", senderMsisdn: sender.msisdn, recipientMsisdn: recipient.msisdn, amount: 100, reference: "payout-conflict-1" };
+  const first = await app.inject({ method: "POST", url: "/internal/payouts", headers, payload });
+  assert.equal(first.statusCode, 201);
+  const conflict = await app.inject({
+    method: "POST",
+    url: "/internal/payouts",
+    headers,
+    payload: { ...payload, amount: 200 },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error, "IDEMPOTENCY_KEY_REUSED");
+});
