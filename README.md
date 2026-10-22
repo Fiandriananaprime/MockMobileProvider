@@ -144,7 +144,7 @@ Example response: `{ "provider": "MVOLA", "msisdn": "0341234567", "accountName":
 
 ## Database schema
 
-The repository includes the final PostgreSQL schema at `database/schema.sql` and versioned migration `database/migrations/001_mock_user_accounts.sql`:
+The repository includes the final PostgreSQL schema at `database/schema.sql` and versioned migration `database/migrations/001_mock_user_accounts.sql`, `002_account_name.sql` and `003_mock_payouts.sql`:
 
 - `mock_accounts` stores provider, generated MSISDN, scrypt password hash, status and balance.
 - `mock_transactions` stores account-linked PAYMENT, TOPUP, RESET, REFUND and payout ledger records.
