@@ -33,7 +33,7 @@ export const payoutRoutes: FastifyPluginAsync = async (app) => {
     if (senderMsisdn === recipientMsisdn) {
       throw new ApiError(400, "INVALID_RECIPIENT", "Sender and recipient must be different accounts");
     }
-    if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) !== amount * 100) {
+    if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || Number(amount.toFixed(2)) !== amount) {
       throw new ApiError(400, "INVALID_AMOUNT", "amount must be a positive amount with at most 2 decimal places");
     }
     if (typeof idempotencyKey !== "string" || idempotencyKey.trim().length < 8 || idempotencyKey.length > 128) {
