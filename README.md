@@ -86,6 +86,33 @@ curl -X POST http://localhost:4010/auth/register \
 
 The Payment Service keeps using the provider routes only (`/token`, `/mvola/*`, `/oauth/v3/token`, `/orange-money-webpay/*`), never `/admin/*`.
 
+## Internal mock payouts
+
+The Payment Service can simulate a NovaMarket-originated payout to an existing wallet with the server-to-server API. This is mock-only; it is not a real MVola or Orange Money disbursement endpoint.
+
+```http
+POST /internal/payouts
+X-API-Key: <MOCK_PROVIDER_API_KEY>
+Idempotency-Key: payout-unique-key-0001
+Content-Type: application/json
+
+{
+  "provider": "MVOLA",
+  "senderMsisdn": "0343500001",
+  "recipientMsisdn": "0341234567",
+  "amount": 2500,
+  "reference": "seller-payout-123"
+}
+```
+
+The sender and recipient must be existing, active wallets for the same provider and currency. The API locks both accounts in a deterministic order and updates both balances plus ledger entries in one PostgreSQL transaction. A successful response has `status: "COMPLETED"`; insufficient balance is recorded as `FAILED` without changing either balance. Reusing an idempotency key with the same request replays the original result; using it for a different request returns `409`.
+
+- `POST /internal/payouts` — execute or replay a payout.
+- `GET /internal/payouts/:payoutId` — read a payout by ID.
+- `GET /internal/payouts/by-idempotency/:key` — retrieve a payout by idempotency key.
+
+All three require `X-API-Key: <MOCK_PROVIDER_API_KEY>`. Do not expose this key to the browser. The seller wallet sees `PAYOUT_RECEIVED` in `GET /account/transactions`; the sender sees `PAYOUT_SENT`.
+
 ## Account names and identity lookup
 
 Wallets may have an optional display/account-holder name (for example, `Rakoto Jean` or `Lidl`). Set it during registration or update it later. This is mock data supplied by the test account owner; it is **not** independently verified by MVola or Orange Money.
@@ -120,7 +147,8 @@ Example response: `{ "provider": "MVOLA", "msisdn": "0341234567", "accountName":
 The repository includes the final PostgreSQL schema at `database/schema.sql` and versioned migration `database/migrations/001_mock_user_accounts.sql`:
 
 - `mock_accounts` stores provider, generated MSISDN, scrypt password hash, status and balance.
-- `mock_transactions` stores account-linked PAYMENT, TOPUP, RESET and REFUND ledger records.
+- `mock_transactions` stores account-linked PAYMENT, TOPUP, RESET, REFUND and payout ledger records.
+- `mock_payouts` stores idempotent, atomic wallet-to-wallet payout requests and their outcomes.
 
 The app applies the migration at startup and does not fall back to in-memory account storage. Provider debits, top-ups and resets lock the account row and write the balance change and ledger record in one PostgreSQL transaction.
 
