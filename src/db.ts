@@ -5,7 +5,7 @@ import { ApiError } from "./shared/errors.js";
 import { runDatabaseMigrations } from "./migrations.js";
 
 export type AccountStatus = "ACTIVE" | "BLOCKED";
-export type LedgerType = "PAYMENT" | "TOPUP" | "RESET" | "REFUND";
+export type LedgerType = "PAYMENT" | "TOPUP" | "RESET" | "REFUND" | "PAYOUT_SENT" | "PAYOUT_RECEIVED";
 export type LedgerStatus = "SUCCESS" | "FAILED";
 
 export interface AccountRecord {
@@ -351,6 +351,184 @@ export async function settleWalletPayment(input: {
       balanceBefore: account.balance,
       balanceAfter,
     };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export interface PayoutRecord {
+  id: string;
+  reference: string;
+  provider: ProviderType;
+  senderMsisdn: string;
+  recipientMsisdn: string;
+  amount: number;
+  currency: string;
+  status: "COMPLETED" | "FAILED";
+  failureReason: string | null;
+  senderBalanceBefore: number;
+  senderBalanceAfter: number;
+  recipientBalanceBefore: number;
+  recipientBalanceAfter: number;
+  createdAt: string;
+}
+
+interface PayoutRow extends QueryResultRow {
+  id: string;
+  reference: string;
+  provider: ProviderType;
+  senderMsisdn: string;
+  recipientMsisdn: string;
+  amount: string | number;
+  currency: string;
+  status: "COMPLETED" | "FAILED";
+  failureReason: string | null;
+  senderBalanceBefore: string | number;
+  senderBalanceAfter: string | number;
+  recipientBalanceBefore: string | number;
+  recipientBalanceAfter: string | number;
+  createdAt: Date | string;
+}
+
+const PAYOUT_FIELDS = `p.id, p.reference, p.provider, sender.msisdn AS "senderMsisdn",
+  recipient.msisdn AS "recipientMsisdn", p.amount, p.currency, p.status,
+  p.failure_reason AS "failureReason", p.sender_balance_before AS "senderBalanceBefore",
+  p.sender_balance_after AS "senderBalanceAfter", p.recipient_balance_before AS "recipientBalanceBefore",
+  p.recipient_balance_after AS "recipientBalanceAfter", p.created_at AS "createdAt"`;
+
+const toPayout = (row: PayoutRow): PayoutRecord => ({
+  ...row,
+  amount: Number(row.amount),
+  senderBalanceBefore: Number(row.senderBalanceBefore),
+  senderBalanceAfter: Number(row.senderBalanceAfter),
+  recipientBalanceBefore: Number(row.recipientBalanceBefore),
+  recipientBalanceAfter: Number(row.recipientBalanceAfter),
+  createdAt: new Date(row.createdAt).toISOString(),
+});
+
+const getPayoutWithClient = async (client: PoolClient, predicate: string, value: string): Promise<(PayoutRecord & { idempotencyKey: string }) | undefined> => {
+  const result = await client.query<PayoutRow & { idempotencyKey: string }>(
+    `SELECT ${PAYOUT_FIELDS}, p.idempotency_key AS "idempotencyKey"
+     FROM mock_payouts p
+     JOIN mock_accounts sender ON sender.id = p.sender_account_id
+     JOIN mock_accounts recipient ON recipient.id = p.recipient_account_id
+     WHERE ${predicate}`,
+    [value],
+  );
+  return result.rows[0] ? { ...toPayout(result.rows[0]), idempotencyKey: result.rows[0].idempotencyKey } : undefined;
+};
+
+export async function getPayoutById(id: string): Promise<PayoutRecord | undefined> {
+  const result = await database().query<PayoutRow>(
+    `SELECT ${PAYOUT_FIELDS} FROM mock_payouts p
+     JOIN mock_accounts sender ON sender.id = p.sender_account_id
+     JOIN mock_accounts recipient ON recipient.id = p.recipient_account_id
+     WHERE p.id = $1`, [id],
+  );
+  return result.rows[0] ? toPayout(result.rows[0]) : undefined;
+}
+
+export async function getPayoutByIdempotencyKey(key: string): Promise<PayoutRecord | undefined> {
+  const result = await database().query<PayoutRow>(
+    `SELECT ${PAYOUT_FIELDS} FROM mock_payouts p
+     JOIN mock_accounts sender ON sender.id = p.sender_account_id
+     JOIN mock_accounts recipient ON recipient.id = p.recipient_account_id
+     WHERE p.idempotency_key = $1`, [key],
+  );
+  return result.rows[0] ? toPayout(result.rows[0]) : undefined;
+}
+
+export async function executeWalletPayout(input: {
+  provider: ProviderType;
+  senderMsisdn: string;
+  recipientMsisdn: string;
+  amount: number;
+  reference: string;
+  idempotencyKey: string;
+}): Promise<{ payout: PayoutRecord; replayed: boolean }> {
+  const client = await database().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`mock-payout:${input.idempotencyKey}`]);
+    const existing = await getPayoutWithClient(client, "p.idempotency_key = $1", input.idempotencyKey);
+    if (existing) {
+      const sameRequest = existing.provider === input.provider &&
+        existing.senderMsisdn === input.senderMsisdn &&
+        existing.recipientMsisdn === input.recipientMsisdn &&
+        existing.amount === input.amount &&
+        existing.reference === input.reference;
+      if (!sameRequest) throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Idempotency key was already used for a different payout");
+      await client.query("COMMIT");
+      const { idempotencyKey: _key, ...payout } = existing;
+      return { payout, replayed: true };
+    }
+
+    const locked = await client.query<AccountRow>(
+      `SELECT ${ACCOUNT_FIELDS} FROM mock_accounts
+       WHERE msisdn = ANY($1::text[]) ORDER BY id FOR UPDATE`,
+      [[input.senderMsisdn, input.recipientMsisdn]],
+    );
+    const senderRow = locked.rows.find((row) => row.msisdn === input.senderMsisdn);
+    const recipientRow = locked.rows.find((row) => row.msisdn === input.recipientMsisdn);
+    if (!senderRow || !recipientRow) throw new ApiError(404, "ACCOUNT_NOT_FOUND", "Sender or recipient account not found");
+    const sender = toAccount(senderRow);
+    const recipient = toAccount(recipientRow);
+    if (sender.provider !== input.provider || recipient.provider !== input.provider) {
+      throw new ApiError(422, "PROVIDER_MISMATCH", "Both wallets must belong to the requested provider");
+    }
+    if (sender.status !== "ACTIVE" || recipient.status !== "ACTIVE") {
+      throw new ApiError(422, "ACCOUNT_BLOCKED", "Both wallets must be active");
+    }
+    if (sender.currency !== recipient.currency) {
+      throw new ApiError(422, "CURRENCY_MISMATCH", "Sender and recipient currencies must match");
+    }
+
+    const insufficient = sender.balance < input.amount;
+    const senderAfter = insufficient ? sender.balance : sender.balance - input.amount;
+    const recipientAfter = insufficient ? recipient.balance : recipient.balance + input.amount;
+    const status = insufficient ? "FAILED" : "COMPLETED";
+    const failureReason = insufficient ? "INSUFFICIENT_BALANCE" : null;
+    const payoutResult = await client.query<PayoutRow>(
+      `INSERT INTO mock_payouts
+        (idempotency_key, reference, provider, sender_account_id, recipient_account_id, amount, currency,
+         status, failure_reason, sender_balance_before, sender_balance_after,
+         recipient_balance_before, recipient_balance_after)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       RETURNING id, reference, provider, amount, currency, status, failure_reason AS "failureReason",
+         sender_balance_before AS "senderBalanceBefore", sender_balance_after AS "senderBalanceAfter",
+         recipient_balance_before AS "recipientBalanceBefore", recipient_balance_after AS "recipientBalanceAfter",
+         created_at AS "createdAt", ''::text AS "senderMsisdn", ''::text AS "recipientMsisdn"`,
+      [input.idempotencyKey, input.reference, input.provider, sender.id, recipient.id, input.amount,
+        sender.currency, status, failureReason, sender.balance, senderAfter, recipient.balance, recipientAfter],
+    );
+
+    if (!insufficient) {
+      await client.query("UPDATE mock_accounts SET balance = $2, updated_at = NOW() WHERE id = $1", [sender.id, senderAfter]);
+      await client.query("UPDATE mock_accounts SET balance = $2, updated_at = NOW() WHERE id = $1", [recipient.id, recipientAfter]);
+      await insertLedger(client, {
+        accountId: sender.id, provider: sender.provider, type: "PAYOUT_SENT", amount: input.amount,
+        currency: sender.currency, status: "SUCCESS", reference: input.reference,
+        balanceBefore: sender.balance, balanceAfter: senderAfter,
+      });
+      await insertLedger(client, {
+        accountId: recipient.id, provider: recipient.provider, type: "PAYOUT_RECEIVED", amount: input.amount,
+        currency: recipient.currency, status: "SUCCESS", reference: input.reference,
+        balanceBefore: recipient.balance, balanceAfter: recipientAfter,
+      });
+    } else {
+      await insertLedger(client, {
+        accountId: sender.id, provider: sender.provider, type: "PAYOUT_SENT", amount: input.amount,
+        currency: sender.currency, status: "FAILED", reference: input.reference,
+        balanceBefore: sender.balance, balanceAfter: sender.balance,
+      });
+    }
+    await client.query("COMMIT");
+    const payout = await getPayoutById(payoutResult.rows[0].id);
+    if (!payout) throw new Error("Payout was committed but could not be loaded");
+    return { payout, replayed: false };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
