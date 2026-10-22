@@ -1288,7 +1288,7 @@ components:
         id: { type: string, format: uuid }
         accountId: { type: string, format: uuid }
         provider: { type: string, enum: [MVOLA, ORANGE_MONEY] }
-        type: { type: string, enum: [PAYMENT, TOPUP, RESET, REFUND] }
+        type: { type: string, enum: [PAYMENT, TOPUP, RESET, REFUND, PAYOUT_SENT, PAYOUT_RECEIVED] }
         amount: { type: number, minimum: 0 }
         currency: { type: string }
         status: { type: string, enum: [SUCCESS, FAILED] }
