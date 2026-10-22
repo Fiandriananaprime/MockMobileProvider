@@ -6,6 +6,7 @@ import websocket from "@fastify/websocket";
 import formbody from "@fastify/formbody";
 import { pathToFileURL } from "node:url";
 import { accountRoutes } from "./accounts/account.routes.js";
+import { payoutRoutes } from "./payouts/payout.routes.js";
 import { authRoutes } from "./auth/auth.routes.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
 import { closeDatabase, ensureDatabaseReady } from "./db.js";
@@ -52,6 +53,7 @@ export async function buildServer(config: RuntimeConfig = loadRuntimeConfig()) {
   await app.register(formbody);
   await app.register(authRoutes);
   await app.register(accountRoutes);
+  await app.register(payoutRoutes);
   await app.register(adminRoutes);
   await app.register(mvolaRoutes);
   await app.register(orangeRoutes);
