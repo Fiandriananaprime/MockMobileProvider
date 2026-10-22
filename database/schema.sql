@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS mock_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES mock_accounts(id) ON DELETE CASCADE,
   provider TEXT NOT NULL CHECK (provider IN ('MVOLA', 'ORANGE_MONEY')),
-  type TEXT NOT NULL CHECK (type IN ('PAYMENT', 'TOPUP', 'RESET', 'REFUND')),
+  type TEXT NOT NULL CHECK (type IN ('PAYMENT', 'TOPUP', 'RESET', 'REFUND', 'PAYOUT_SENT', 'PAYOUT_RECEIVED')),
   amount NUMERIC(18, 2) NOT NULL CHECK (amount >= 0),
   currency TEXT NOT NULL DEFAULT 'MGA',
   status TEXT NOT NULL CHECK (status IN ('SUCCESS', 'FAILED')),
@@ -36,3 +36,23 @@ CREATE INDEX IF NOT EXISTS idx_mock_transactions_account_created
   ON mock_transactions (account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mock_transactions_reference
   ON mock_transactions (reference);
+
+CREATE TABLE IF NOT EXISTS mock_payouts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  reference TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('MVOLA', 'ORANGE_MONEY')),
+  sender_account_id UUID NOT NULL REFERENCES mock_accounts(id),
+  recipient_account_id UUID NOT NULL REFERENCES mock_accounts(id),
+  amount NUMERIC(18, 2) NOT NULL CHECK (amount > 0),
+  currency TEXT NOT NULL DEFAULT 'MGA',
+  status TEXT NOT NULL CHECK (status IN ('COMPLETED', 'FAILED')),
+  failure_reason TEXT,
+  sender_balance_before NUMERIC(18, 2) NOT NULL,
+  sender_balance_after NUMERIC(18, 2) NOT NULL,
+  recipient_balance_before NUMERIC(18, 2) NOT NULL,
+  recipient_balance_after NUMERIC(18, 2) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_mock_payouts_sender_created ON mock_payouts(sender_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mock_payouts_recipient_created ON mock_payouts(recipient_account_id, created_at DESC);
