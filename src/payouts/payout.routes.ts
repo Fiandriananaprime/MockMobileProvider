@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { loadRuntimeConfig } from "../config.js";
 import { getPayoutById, getPayoutByIdempotencyKey, executeWalletPayout } from "../db.js";
+import { isCallbackUrlAllowed } from "../shared/callback-url.js";
 import { ApiError } from "../shared/errors.js";
 
 const requireProviderKey = (header: string | string[] | undefined): void => {
@@ -12,6 +13,42 @@ const requireProviderKey = (header: string | string[] | undefined): void => {
   }
 };
 
+type PayoutCallback = {
+  payoutId: string;
+  reference: string;
+  provider: string;
+  status: "COMPLETED" | "FAILED";
+  failureReason: string | null;
+  amount: number;
+  currency: string;
+  idempotencyKey: string;
+};
+
+async function deliverPayoutCallback(url: string, payload: PayoutCallback, apiKey: string): Promise<void> {
+  // The provider commits the payout before notifying Payment Service. Retry transient
+  // failures because the callback may be the only confirmation after a client timeout.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "idempotency-key": payload.idempotencyKey,
+        },
+        body: JSON.stringify(payload),
+        redirect: "error",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (response.ok) return;
+      console.warn(`[payout] callback returned HTTP ${response.status} (attempt ${attempt + 1})`);
+    } catch (error) {
+      console.warn(`[payout] callback delivery failed (attempt ${attempt + 1}):`, (error as Error).message);
+    }
+    if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
+  }
+}
+
 export const payoutRoutes: FastifyPluginAsync = async (app) => {
   app.post("/internal/payouts", async (request, reply) => {
     requireProviderKey(request.headers["x-api-key"]);
@@ -21,13 +58,15 @@ export const payoutRoutes: FastifyPluginAsync = async (app) => {
     const provider = body.provider;
     const amount = body.amount;
     const reference = body.reference;
+    const callbackUrl = body.callbackUrl;
+    const clientPayoutId = body.clientPayoutId;
     const idempotencyKey = request.headers["idempotency-key"] ?? body.idempotencyKey;
 
     if (provider !== "MVOLA" && provider !== "ORANGE_MONEY") {
       throw new ApiError(400, "INVALID_PROVIDER", "provider must be MVOLA or ORANGE_MONEY");
     }
-    if (typeof senderMsisdn !== "string" || !/^\d{10}$/.test(senderMsisdn) ||
-        typeof recipientMsisdn !== "string" || !/^\d{10}$/.test(recipientMsisdn)) {
+    if (typeof senderMsisdn !== "string" || !/^\\d{10}$/.test(senderMsisdn) ||
+        typeof recipientMsisdn !== "string" || !/^\\d{10}$/.test(recipientMsisdn)) {
       throw new ApiError(400, "INVALID_MSISDN", "senderMsisdn and recipientMsisdn must contain 10 digits");
     }
     if (senderMsisdn === recipientMsisdn) {
@@ -42,6 +81,12 @@ export const payoutRoutes: FastifyPluginAsync = async (app) => {
     if (typeof reference !== "string" || !reference.trim() || reference.length > 120) {
       throw new ApiError(400, "INVALID_REFERENCE", "reference must contain 1-120 characters");
     }
+    if (typeof callbackUrl !== "string" || !isCallbackUrlAllowed(callbackUrl)) {
+      throw new ApiError(400, "INVALID_CALLBACK_URL", "callbackUrl must be an allowed HTTP(S) callback URL");
+    }
+    if (typeof clientPayoutId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientPayoutId)) {
+      throw new ApiError(400, "INVALID_CLIENT_PAYOUT_ID", "clientPayoutId must be a UUID");
+    }
 
     const result = await executeWalletPayout({
       provider,
@@ -51,7 +96,21 @@ export const payoutRoutes: FastifyPluginAsync = async (app) => {
       reference: reference.trim(),
       idempotencyKey: idempotencyKey.trim(),
     });
-    return reply.code(result.replayed ? 200 : 201).send(result.payout);
+    const payout = result.payout;
+    const payload: PayoutCallback = {
+      payoutId: clientPayoutId,
+      reference: payout.reference,
+      provider: payout.provider,
+      status: payout.status,
+      failureReason: payout.failureReason,
+      amount: payout.amount,
+      currency: payout.currency,
+      idempotencyKey: idempotencyKey.trim(),
+    };
+    // Do not hold the API response open for callback delivery. The payment service
+    // may already have committed its PROCESSING payout when this notification arrives.
+    setTimeout(() => void deliverPayoutCallback(callbackUrl, payload, loadRuntimeConfig().providerApiKey), 500).unref();
+    return reply.code(result.replayed ? 200 : 201).send(payout);
   });
 
   app.get("/internal/payouts/:payoutId", async (request) => {
