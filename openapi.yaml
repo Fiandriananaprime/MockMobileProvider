@@ -242,6 +242,99 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /internal/payouts:
+    post:
+      tags: [Mock]
+      operationId: executeMockPayout
+      summary: Simulate a server-to-server payout between two wallets
+      description: MOCK-ONLY. Atomically debits the sender and credits the recipient in PostgreSQL. Not a real provider disbursement API.
+      security:
+        - providerApiKey: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MockPayoutRequest" }
+            example: { provider: MVOLA, senderMsisdn: "0343500001", recipientMsisdn: "0341234567", amount: 2500, reference: seller-payout-123 }
+      responses:
+        "201":
+          description: Payout processed (COMPLETED or FAILED)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockPayoutResponse" }
+        "200":
+          description: Existing idempotent result replayed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockPayoutResponse" }
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: Invalid provider API key
+        "404":
+          description: Sender or recipient not found
+        "409":
+          description: Idempotency key reused for a different request
+        "422":
+          description: Inactive wallets or provider/currency mismatch
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /internal/payouts/{payoutId}:
+    get:
+      tags: [Mock]
+      operationId: getMockPayout
+      summary: Get a mock payout by ID
+      security:
+        - providerApiKey: []
+      parameters:
+        - name: payoutId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Payout status and balance snapshots
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockPayoutResponse" }
+        "401":
+          description: Invalid provider API key
+        "404":
+          description: Payout not found
+
+  /internal/payouts/by-idempotency/{key}:
+    get:
+      tags: [Mock]
+      operationId: getMockPayoutByIdempotencyKey
+      summary: Retrieve a payout by idempotency key
+      security:
+        - providerApiKey: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        "200":
+          description: Payout status and balance snapshots
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MockPayoutResponse" }
+        "401":
+          description: Invalid provider API key
+        "404":
+          description: Payout not found
+
   /admin/accounts:
     get:
       tags: [Admin]
@@ -1251,6 +1344,35 @@ components:
         otp: { type: string, pattern: "^\\d{6}$" }
         createdAt: { type: string, format: date-time }
         expiresAt: { type: string, format: date-time }
+    MockPayoutRequest:
+      type: object
+      required: [provider, senderMsisdn, recipientMsisdn, amount, reference]
+      additionalProperties: false
+      properties:
+        provider: { type: string, enum: [MVOLA, ORANGE_MONEY] }
+        senderMsisdn: { type: string, pattern: "^\\d{10}$" }
+        recipientMsisdn: { type: string, pattern: "^\\d{10}$" }
+        amount: { type: number, exclusiveMinimum: 0, multipleOf: 0.01 }
+        reference: { type: string, minLength: 1, maxLength: 120 }
+    MockPayoutResponse:
+      type: object
+      required: [id, reference, provider, senderMsisdn, recipientMsisdn, amount, currency, status, senderBalanceBefore, senderBalanceAfter, recipientBalanceBefore, recipientBalanceAfter, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        reference: { type: string }
+        provider: { type: string, enum: [MVOLA, ORANGE_MONEY] }
+        senderMsisdn: { type: string }
+        recipientMsisdn: { type: string }
+        amount: { type: number }
+        currency: { type: string }
+        status: { type: string, enum: [COMPLETED, FAILED] }
+        failureReason: { type: string, nullable: true }
+        senderBalanceBefore: { type: number }
+        senderBalanceAfter: { type: number }
+        recipientBalanceBefore: { type: number }
+        recipientBalanceAfter: { type: number }
+        createdAt: { type: string, format: date-time }
+
     # ---- MVola
     KeyValue:
       type: object
